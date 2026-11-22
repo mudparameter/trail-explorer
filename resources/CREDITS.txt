@@ -1,0 +1,4 @@
+Noto Sans: SIL Open Font License 1.1 (https://openfontlicense.org), packaged by versatiles-fonts.
+Map icons: VersaTiles (base) and OpenFreeMap/Maki (ofm, CC0).
+liberty.json: derived from OpenFreeMap Liberty / OSM Liberty / OSM Bright. Code BSD 3-Clause, design CC BY 4.0.
+shortbread.json: generated with @versatiles/style (MIT).

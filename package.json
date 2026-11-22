@@ -1,0 +1,68 @@
+{
+  "name": "trail-explorer",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check-garmin-key": "node scripts/check-garmin-key.mjs",
+    "test": "node --test test/*.test.*",
+    "build": "electron-vite build",
+    "start": "electron-vite build && electron .",
+    "typecheck": "tsc",
+    "package": "electron-vite build && electron-builder --mac --arm64 --publish never"
+  },
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@versatiles/style": "^9.1.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "fflate": "^0.8.3",
+    "fit-file-parser": "^6.2.10",
+    "maplibre-gl": "^6.19.0",
+    "playwright-core": "^1.65.1",
+    "pmtiles": "^4.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "main": "out/main/main.cjs",
+  "productName": "Trail Explorer",
+  "description": "See everywhere you have ridden on one map.",
+  "author": "Trail Explorer",
+  "build": {
+    "appId": "app.trailexplorer.desktop",
+    "productName": "Trail Explorer",
+    "directories": {
+      "output": "dist/${version}"
+    },
+    "files": [
+      "out/**",
+      "package.json",
+      "!node_modules/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.sports",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "sign": false
+    }
+  }
+}

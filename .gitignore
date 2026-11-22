@@ -1,0 +1,13 @@
+node_modules/
+.local/
+.DS_Store
+.env*
+*.key
+key.bin
+*.fit
+*.gpx
+*.tcx
+*.pmtiles
+*.mbtiles
+dist/
+out/
