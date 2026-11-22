@@ -18,7 +18,7 @@ interface Props {
   removed(id: string): void;
 }
 
-export function ago(iso: string | null): string {
+function ago(iso: string | null): string {
   if (!iso) return 'never';
   const m = Math.round((Date.now() - Date.parse(iso)) / 60_000);
   if (m < 1) return 'just now';

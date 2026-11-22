@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, watch } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
@@ -14,10 +14,15 @@ const here = join(root, 'out', 'main');
 const resources = app.isPackaged ? join(process.resourcesPath, 'resources') : join(root, 'resources');
 const uiDir = join(here, '..', 'ui');
 
-app.setName('Trail Explorer');
+// Anything not packaged is a development copy. It has its own data folder and
+// Keychain entry, so it can run beside the real app and never touches its rides or key.
+const appName = app.isPackaged ? 'Trail Explorer' : 'Trail Explorer Dev';
+app.setName(appName);
+/** Address of the hot reload server under `npm run dev`, otherwise null. */
+const devServer = !app.isPackaged && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.ELECTRON_RENDERER_URL ?? '') ? process.env.ELECTRON_RENDERER_URL! : null;
 // Test hooks. They do nothing in the packaged app.
 const test = app.isPackaged ? {} : { data: process.env.TRAIL_TEST_DATA, garmin: process.env.TRAIL_TEST_GARMIN };
-app.setPath('userData', test.data ?? join(app.getPath('appData'), 'Trail Explorer'));
+app.setPath('userData', test.data ?? join(app.getPath('appData'), appName));
 const garminBase = test.garmin?.startsWith('http://127.0.0.1:') ? test.garmin : GARMIN;
 
 protocol.registerSchemesAsPrivileged([
@@ -27,11 +32,12 @@ protocol.registerSchemesAsPrivileged([
 const MAP_HOSTS = 'https://tiles.openfreemap.org https://*.tile.opentopomap.org https://www.ign.es';
 const CSP = [
   "default-src 'none'",
-  "script-src 'self'",
+  // Hot reload adds an inline script and a socket. Never in the packaged app.
+  `script-src 'self'${devServer ? " 'unsafe-inline'" : ''}`,
   "worker-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   `img-src 'self' trail: data: blob: ${MAP_HOSTS}`,
-  `connect-src 'self' trail: blob: ${MAP_HOSTS}`,
+  `connect-src 'self' trail: blob: ${MAP_HOSTS}${devServer ? ` ${devServer.replace('http', 'ws')}` : ''}`,
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
@@ -264,6 +270,15 @@ function start() {
       return none(400);
     }
     if (path.includes('\0')) return none(400);
+    if (u.host === 'app' && devServer) {
+      try {
+        const r = await net.fetch(`${devServer}${u.pathname}${u.search}`, { headers: { Accept: req.headers.get('accept') ?? '*/*' }, bypassCustomProtocolHandlers: true });
+        const headers = new Headers({ 'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream', 'Content-Security-Policy': CSP, 'Cache-Control': 'no-store' });
+        return new Response(await r.arrayBuffer(), { status: r.status, headers });
+      } catch {
+        return none(502);
+      }
+    }
     if (u.host === 'app') return file(uiDir, path || 'index.html', { 'Content-Security-Policy': CSP, 'Referrer-Policy': 'no-referrer' });
     if (u.host === 'styles' || u.host === 'sprites') return file(join(resources, u.host), path);
     if (u.host === 'heatmap') {
@@ -309,7 +324,7 @@ function start() {
 
   function openWindow() {
     win = new BrowserWindow({
-      width: 1280, height: 820, minWidth: 720, minHeight: 480, title: 'Trail Explorer', backgroundColor: '#ffffff',
+      width: 1280, height: 820, minWidth: 720, minHeight: 480, title: appName, backgroundColor: '#ffffff',
       webPreferences: { preload: join(here, '..', 'preload', 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
     });
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -348,9 +363,20 @@ function start() {
     hasKey = has;
     openWindow();
     if (has) sync.start();
-    if (!version && store.counts().done) void buildHeatmap();
+    // In development, redraw on every start so heatmap changes show.
+    if ((!version || devServer) && store.counts().done) void buildHeatmap();
+    if (devServer) {
+      let t: NodeJS.Timeout | undefined;
+      watch(resources, { recursive: true }, () => {
+        clearTimeout(t);
+        t = setTimeout(() => win?.webContents.reload(), 200);
+      });
+    }
   });
 }
 
-if (app.requestSingleInstanceLock()) void app.whenReady().then(start);
+// Not in hot reload: a restart overlaps with the old copy closing, and an app that
+// fails to get the lock once never becomes ready. The dev server's fixed port
+// already stops two sessions running.
+if (devServer || app.requestSingleInstanceLock()) void app.whenReady().then(start);
 else app.quit();

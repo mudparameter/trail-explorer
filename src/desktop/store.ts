@@ -8,7 +8,7 @@ export class Store {
   private db: DatabaseSync;
 
   constructor(file: string) {
-    this.db = new DatabaseSync(file);
+    this.db = new DatabaseSync(file, { timeout: 5000 });
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS ride (

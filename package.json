@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "node scripts/dev.mjs",
     "check-garmin-key": "node scripts/check-garmin-key.mjs",
     "test": "node --test test/*.test.*",
     "build": "electron-vite build",
