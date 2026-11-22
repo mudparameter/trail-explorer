@@ -1,13 +1,33 @@
+# Dependencies
 node_modules/
+
+# Builds and installers
+dist/
+out/
+*.app/
+*.dmg
+*.pkg
+*.blockmap
+builder-debug.yml
+
+# Keys and local data
 .local/
-.DS_Store
 .env*
 *.key
 key.bin
+*.db
+*.db-shm
+*.db-wal
+
+# Rides, Garmin exports and map files
 *.fit
 *.gpx
 *.tcx
+*.zip
 *.pmtiles
 *.mbtiles
-dist/
-out/
+*.osm.pbf
+
+# Other
+*.log
+.DS_Store
