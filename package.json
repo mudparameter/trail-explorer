@@ -36,6 +36,7 @@
   "productName": "Trail Explorer",
   "description": "See everywhere you have ridden on one map.",
   "author": "Trail Explorer",
+  "license": "MIT",
   "build": {
     "appId": "app.trailexplorer.desktop",
     "productName": "Trail Explorer",

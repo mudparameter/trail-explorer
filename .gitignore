@@ -31,3 +31,17 @@ key.bin
 # Other
 *.log
 .DS_Store
+
+# Linux and Windows installers
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.exe
+*.msi
+
+# Test and editor output
+coverage/
+.vscode/
+.idea/
+Thumbs.db
