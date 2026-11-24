@@ -34,6 +34,11 @@ export interface PlanRequest {
   variant?: number;
   /** Take in your favourite trails: the ones you have ridden most in these areas. */
   favorites?: boolean;
+  /**
+   * Metres either side of the distance that are fine. With it, routes are planned
+   * for a few distances in that range and the ones within it are kept, closest first.
+   */
+  tolerance?: number | null;
 }
 
 /** Favourite trails cost this much less per metre, so routes go out of their way for them. */

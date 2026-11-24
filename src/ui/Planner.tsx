@@ -59,6 +59,8 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
   const [maxUp, setMaxUp] = useState('');
   const [difficulty, setDifficulty] = useState<Level | null>(null);
   const [tolerance, setTolerance] = useState('5');
+  /** Step 3 shows the magic planner's few settings, or all of them. */
+  const [magicMode, setMagicMode] = useState(false);
   const [ridden, setRidden] = useState<RiddenLook>(savedLook);
   /** How the routes shown were asked for, so a new set can be asked for the same way. */
   const [asked, setAsked] = useState<{ magic: boolean; variant: number; seen: string[] } | null>(null);
@@ -142,7 +144,9 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     const mu = maxUp.trim() === '' ? null : Number(maxUp);
     if (mu !== null && !(mu >= 1 && mu <= 100)) return 'Steepest climb should be a number from 1 to 100%, or empty.';
     if (!kinds.length) return 'Choose at least one kind of path.';
-    return { ...p, climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted, maxDown: md, maxUp: mu, favorites };
+    const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
+    if (tolerance.trim() === '' || !(tol >= 0 && tol <= 100_000)) return 'Choose how far off the distance may be, from 0 to 100 km (62 mi).';
+    return { ...p, tolerance: Math.round(tol), climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted, maxDown: md, maxUp: mu, favorites };
   };
   /** Plans routes, or magic ones. `again` asks for a new set, leaving out the ones shown so far. */
   const plan = async (magic: boolean, again = false) => {
@@ -262,24 +266,40 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
           </section>
 
           <section className="step">
-            {head(3, 'Your ride', `${dist} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}${difficulty ? `, ${difficulty.toLowerCase()}` : ''}${maxUp ? `, up ≤ ${maxUp}%` : ''}${maxDown ? `, down ≤ ${maxDown}%` : ''}${favorites ? ', with favourites' : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
+            {head(3, 'Your ride', magicMode ? `✨ ${dist} ± ${tolerance} ${distUnit}, ${(difficulty ?? 'any').toLowerCase()}${favorites ? ', with favourites' : ''}` : `${dist} ± ${tolerance} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}${difficulty ? `, ${difficulty.toLowerCase()}` : ''}${maxUp ? `, up ≤ ${maxUp}%` : ''}${maxDown ? `, down ≤ ${maxDown}%` : ''}${favorites ? ', with favourites' : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
             {step === 3 && (
-              <form className="form ride" onSubmit={(e) => { e.preventDefault(); void plan(false); }}>
+              <form className="form ride" onSubmit={(e) => { e.preventDefault(); void plan(magicMode); }}>
+                <div className="choice mode" role="radiogroup" aria-label="Planning">
+                  <label><input type="radio" name="mode" checked={!magicMode} onChange={() => setMagicMode(false)} /> Normal</label>
+                  <label><input type="radio" name="mode" checked={magicMode} onChange={() => { setMagicMode(true); if (!difficulty) setDifficulty('Moderate'); }} /> ✨ Magic</label>
+                </div>
+                {magicMode && (
+                  <p className="small magic-note">
+                    Only the distance, difficulty and favourite trails count. Climbing, steepness and path difficulty are chosen
+                    to suit the difficulty you pick, and paths marked private or no bikes are left out.
+                  </p>
+                )}
                 <label>
                   Distance
-                  <span className="row">
+                  <span className="row distance">
                     <input type="number" min={0.5} step={0.5} value={dist} onChange={(e) => setDist(e.target.value)} aria-label="Distance" />
                     <select value={distUnit} aria-label="Distance unit" onChange={(e) => setDistUnit(e.target.value as 'km' | 'mi')}><option value="km">km</option><option value="mi">mi</option></select>
+                    <span>±</span>
+                    <input type="number" min={0} step={1} value={tolerance} onChange={(e) => setTolerance(e.target.value)} aria-label="Distance tolerance" />
+                    <span>{distUnit}</span>
                   </span>
+                  <span className="small">Routes within this much of the distance are fine, closest first. 0 for as close as can be.</span>
                 </label>
                 <fieldset>
                   <legend>Difficulty</legend>
-                  <label className="inline"><input type="radio" name="difficulty" checked={difficulty === null} onChange={() => setDifficulty(null)} /> Any</label>
+                  {!magicMode && <label className="inline"><input type="radio" name="difficulty" checked={difficulty === null} onChange={() => setDifficulty(null)} /> Any</label>}
                   {LEVELS.map((l) => (
                     <label key={l} className="inline"><input type="radio" name="difficulty" checked={difficulty === l} onChange={() => setDifficulty(l)} /> {l}</label>
                   ))}
-                  <span className="small">Routes rated this way are listed first.</span>
+                  <span className="small">{magicMode ? 'Routes are made to suit it.' : 'Routes rated this way are listed first.'}</span>
                 </fieldset>
+                {!magicMode && (
+                  <>
                 <label>
                   Climbing <span className="small">(optional)</span>
                   <span className="row">
@@ -319,30 +339,17 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                   ))}
                   <label className="inline"><input type="checkbox" checked={allowRestricted} onChange={(e) => setAllowRestricted(e.target.checked)} /> Allow paths marked private or no bikes</label>
                 </fieldset>
-                <label className="inline">
+                  </>
+                )}
+                <label className="fav">
                   <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} /> Include my favourite trails
                   <span className="small"> The ones you have ridden most in these areas. Routes go out of their way for them, and ones with more come first.</span>
                 </label>
-                <button disabled={busy !== null}>{busy === 'plan' ? 'Planning…' : 'Plan routes'}</button>
-                <fieldset className="magic">
-                  <legend>Magic routes</legend>
-                  <p className="small">
-                    Only the distance, difficulty and favourite trails count: everything else above is set for you, with climbing,
-                    steepness and how technical the paths are to suit the difficulty. Paths marked private or no bikes are left out.
-                  </p>
-                  <label>
-                    Distance may be off by
-                    <span className="row">
-                      <span>±</span>
-                      <input type="number" min={0} step={1} value={tolerance} onChange={(e) => setTolerance(e.target.value)} aria-label="Magic distance tolerance" />
-                      <span>{distUnit}</span>
-                    </span>
-                  </label>
-                  <button type="button" disabled={busy !== null || !difficulty} onClick={() => void plan(true)}>
-                    {busy === 'magic' ? 'Working magic…' : '✨ Magic routes'}
-                  </button>
-                  {!difficulty && <span className="small">Choose a difficulty first.</span>}
-                </fieldset>
+                {magicMode ? (
+                  <button className="magic-go" disabled={busy !== null || !difficulty}>{busy === 'magic' ? 'Working magic…' : '✨ Magic routes'}</button>
+                ) : (
+                  <button disabled={busy !== null}>{busy === 'plan' ? 'Planning…' : 'Plan routes'}</button>
+                )}
               </form>
             )}
           </section>
@@ -354,10 +361,11 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 <p className="small">Click a route to see it. Save the ones you like; they go to Saved routes.</p>
                 {(() => {
                   const want = Number(dist) * (distUnit === 'mi' ? 1609.344 : 1000);
-                  const off = routes.length && routes.every((r) => Math.abs(r.stats.distance - want) / want > 0.15);
+                  const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
+                  const off = routes.length && routes.every((r) => Math.abs(r.stats.distance - want) > Math.max(tol, want * 0.05));
                   return off ? (
                     <p className="small warn" role="status">
-                      None of these is close to {km(want)}. {routes.every((r) => r.stats.distance < want) ? 'The chosen areas are too small for that without riding the same paths again: add or grow areas, or ask for less.' : 'The paths here don’t allow a route that short from this start.'}
+                      None of these is within {tolerance} {distUnit} of {km(want)}. {routes.every((r) => r.stats.distance < want) ? 'The chosen areas are too small for that without riding the same paths again: add or grow areas, or ask for less.' : 'The paths here don’t allow a route that short from this start.'}
                     </p>
                   ) : null;
                 })()}

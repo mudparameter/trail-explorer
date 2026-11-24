@@ -168,6 +168,12 @@ table.routes .name input { min-width: 160px; }
 .area-details label.small.check { flex-direction: row; align-items: center; gap: 6px; }
 .choose .nested { margin: 2px 0 0 22px; padding: 0; }
 .circle-preview { display: block; margin-top: 4px; border-radius: 4px; }
-.ride .magic { border: 1px solid #c4b5fd; background: #faf5ff; border-radius: 6px; padding: 6px 10px 10px; }
-.ride .magic p { margin: 0 0 6px; }
+.ride .mode { display: flex; flex-direction: row; gap: 16px; padding: 4px 0 2px; font-weight: 600; }
+.ride .mode label { display: flex; flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+.form.ride .row.distance { flex-wrap: wrap; gap: 4px; }
+.form.ride .row.distance input[type='number'] { width: 54px; }
+.form.ride label.fav { display: block; }
+.form.ride label.fav .small { display: block; margin: 2px 0 0 22px; }
+.ride .magic-note { border: 1px solid #c4b5fd; background: #faf5ff; border-radius: 6px; padding: 6px 10px; margin: 0; }
+.ride .magic-go { background: #7c3aed; color: #fff; border-color: #6d28d9; }
 .plan-key label { display: block; margin-top: 4px; }

@@ -741,10 +741,11 @@ function start() {
     if (!kinds.length) throw new Error('Choose at least one kind of path.');
     if (r.maxDown != null && !(typeof r.maxDown === 'number' && r.maxDown >= 1 && r.maxDown <= 100)) throw new Error('Choose a steepest descent from 1 to 100%, or leave it empty.');
     if (r.maxUp != null && !(typeof r.maxUp === 'number' && r.maxUp >= 1 && r.maxUp <= 100)) throw new Error('Choose a steepest climb from 1 to 100%, or leave it empty.');
+    if (r.tolerance != null && !(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
     const more = planMore(o);
     const request: PlanRequest = {
       start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true,
-      maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true,
+      maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true, tolerance: r.tolerance ?? null,
     };
     planned = await runJob<PlannedRoute[]>('planRoutes', { key, request, seen: more.seen, difficulty: more.difficulty });
     if (!planned.length) throw new Error('No routes could be made from there. Try a shorter distance, more kinds of path, or a start inside an area.');

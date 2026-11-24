@@ -132,11 +132,16 @@ try {
 
   // 3. The ride.
   await w.getByLabel('Distance', { exact: true }).fill('6');
+  assert.equal(await w.getByLabel('Distance tolerance').inputValue(), '5', '± 5 km unless changed');
+  await w.getByLabel('Distance tolerance').fill('1');
   await w.getByRole('button', { name: 'Plan routes' }).click();
 
   // 4. Routes: three to five, rated, in both units.
   await w.locator('.route-card').nth(2).waitFor({ timeout: 30000 });
   const cards = await w.locator('.route-card').count();
+  const planKm = (await w.locator('.route-card').allInnerTexts()).map((t) => Number(t.match(/Distance\s*([\d.]+) km/)![1]));
+  console.log('6 ± 1 km:', planKm.join(' '));
+  assert.ok(planKm.every((x) => Math.abs(x - 6) <= 1.05), `all within 6 ± 1 km: ${planKm}`);
   assert.ok(cards >= 3 && cards <= 5, `${cards} routes`);
   console.log('new trail per route:', (await w.locator('.route-card').allInnerTexts()).map((t) => t.match(/New trail[^,]*, (\d+%)/)?.[1]).join(' '));
   const card = await w.locator('.route-card').first().innerText();
@@ -259,10 +264,19 @@ try {
 
   // Magic: only distance and difficulty count. A climbing wish of 9,000 m is ignored.
   await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
-  assert.ok(await w.getByRole('button', { name: '✨ Magic routes' }).isDisabled(), 'needs a difficulty');
+  assert.equal(await w.getByRole('button', { name: '✨ Magic routes' }).count(), 0, 'normal mode: no magic button');
   await w.getByLabel('Climbing', { exact: true }).fill('9000');
+  // Magic mode shows only what magic uses.
+  await w.getByLabel('✨ Magic').check();
+  for (const hidden of ['Climbing', 'Steepest climb', 'Steepest descent']) assert.equal(await w.getByLabel(hidden, { exact: true }).count(), 0, `${hidden} hidden`);
+  await w.getByText('Paths to use').waitFor({ state: 'detached' });
+  assert.equal(await w.getByRole('button', { name: 'Plan routes' }).count(), 0);
+  assert.equal(await w.getByLabel('Any', { exact: true }).count(), 0, 'magic needs a difficulty');
+  assert.ok(await w.getByLabel('Moderate').isChecked(), 'Moderate unless chosen');
+  await w.getByLabel('Include my favourite trails').waitFor();
+  await shot('2f-magic-mode');
   await w.getByLabel('Hard', { exact: true }).check();
-  await w.getByLabel('Magic distance tolerance').fill('2');
+  await w.getByLabel('Distance tolerance').fill('2');
   await w.getByRole('button', { name: '✨ Magic routes' }).click();
   await w.locator('.route-card').first().waitFor({ timeout: 60000 });
   const magicCards = await w.locator('.route-card').allInnerTexts();
@@ -283,6 +297,11 @@ try {
     .catch(async () => { await w.getByText(/No other routes from there/).waitFor({ timeout: 1000 }); console.log('magic: no other routes'); });
   console.log('magic, new set:', (await w.locator('.route-card').allInnerTexts()).map((t) => `${kmOf(t)} km`).join(' | '));
   await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  // Back to normal: everything is back, as it was, and the magic button goes.
+  await w.getByLabel('Normal', { exact: true }).check();
+  assert.equal(await w.getByLabel('Climbing', { exact: true }).inputValue(), '9000');
+  assert.equal(await w.getByRole('button', { name: '✨ Magic routes' }).count(), 0);
+  await w.getByRole('button', { name: 'Plan routes' }).waitFor();
   await w.getByLabel('Climbing', { exact: true }).fill('');
   await w.getByLabel('Any', { exact: true }).check();
   await w.getByLabel('Include my favourite trails').uncheck();

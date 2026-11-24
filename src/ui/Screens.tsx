@@ -124,15 +124,16 @@ export function Help() {
       <h2>Plan a route</h2>
       <p>
         Draw circles first. Then choose Route planner under Roads and trails. It opens a separate mode, with a blue bar on top, in
-        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance, climbing,
+        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance (give or take a tolerance, 5 km unless you change it), climbing,
         the steepest climb and descent you want to ride (optional), a difficulty, and how much new trail you want, and pick from three to five routes. Each shows its difficulty and why, distance, climbing and
         descent in metric and imperial, steep parts and an elevation profile. Save the ones you like. Saved routes are under Routes,
         in a table you can sort by clicking a column; there you can rename, view, download as .gpx or delete them.
       </p>
       <p>
-        Not keen on any of the routes? Generate new routes asks for a different set. ✨ Magic routes in step 3 uses only the
-        distance and difficulty, with a tolerance either side of the distance (5 km unless you change it), and picks the
-        steepness, how technical the paths are, and the climbing to suit that difficulty. Paths you&apos;ve ridden, under the map key,
+        Not keen on any of the routes? Generate new routes asks for a different set. Switch step 3 to ✨ Magic to see only what
+        magic routes use: the
+        distance (with its tolerance), the difficulty and your favourite trails. Magic picks the steepness, how technical
+        the paths are, and the climbing to suit that difficulty. Paths you&apos;ve ridden, under the map key,
         highlights them, darkens them, colours them like your heatmap by times ridden, or shows them like any other path. Include my
         favourite trails, in step 3, takes in the paths you have ridden most in those areas, riding along a stretch of them.
       </p>

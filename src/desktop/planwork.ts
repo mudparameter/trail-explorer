@@ -82,37 +82,77 @@ function ready(key: string) {
   return { net: current.net, at, climbOf };
 }
 
-/**
- * Routes for a request. `seen` are routes already shown, left out so a new set is
- * new. With a `difficulty`, routes rated that way come first.
- */
-export function routes({ key, request, seen = [], difficulty = null }: { key: string; request: PlanRequest; seen?: string[]; difficulty?: Difficulty | null }): PlannedRoute[] {
-  const { at, climbOf } = ready(key);
-  const fresh = (rs: PlannedRoute[]) => {
-    const out = rs.filter((r) => !seen.includes(r.id));
-    if (rs.length && !out.length) throw new Error('No other routes from there. Try changing the ride, or another start.');
-    if (!difficulty) return out;
-    const want = LEVELS.indexOf(difficulty) + 1;
-    // Stable: closest difficulty first, otherwise in the planner's order.
-    return out.map((r, i) => ({ r, i })).sort((a, b) => Math.abs(a.r.rating.level - want) - Math.abs(b.r.rating.level - want) || a.i - b.i).map((x) => x.r);
-  };
-  return fresh(plain(key, request, seen.length ? 10 : undefined, at, climbOf)).slice(0, 5);
+type Found = { p: Planned; r: PlannedRoute; s: number };
+
+/** Up to five of the best, each different enough from the ones before. */
+function pickDiverse(net: Network, ranked: Found[]): PlannedRoute[] {
+  const out: Found[] = [];
+  for (const limit of [0.5, 0.75, 0.9, 1.01]) {
+    for (const x of ranked) {
+      if (out.length >= 5) break;
+      if (out.includes(x) || out.some((y) => overlap(net.edges, x.p, y.p) > limit)) continue;
+      out.push(x);
+    }
+    if (out.length >= Math.min(3, ranked.length)) break;
+  }
+  return out.map((x) => x.r);
 }
 
-function plain(key: string, request: PlanRequest, count: number | undefined, at: (lon: number, lat: number) => number, climbOf: (p: Planned) => number): PlannedRoute[] {
-  const { net } = ready(key);
+/**
+ * Routes for a request. With a tolerance, routes are planned for the distance and
+ * half the tolerance either side, and the ones within it come first, closest
+ * first. `seen` are routes already shown, left out so a new set is new. With a
+ * `difficulty`, routes rated that way come first.
+ */
+export function routes({ key, request, seen = [], difficulty = null }: { key: string; request: PlanRequest; seen?: string[]; difficulty?: Difficulty | null }): PlannedRoute[] {
+  const { net, at, climbOf } = ready(key);
+  const d = request.distance;
+  const tol = request.tolerance ?? null;
+  const dists = tol ? [d, d + tol / 2, d - tol / 2].filter((x) => x >= 500) : [d];
+  const found = new Map<string, Found>();
+  let problem: unknown = null;
+  for (const [run, dist] of dists.entries()) {
+    let list: { p: Planned; r: PlannedRoute }[];
+    try {
+      list = plain(net, { ...request, distance: dist }, dists.length > 1 || seen.length ? 10 : undefined, at, climbOf);
+    } catch (e) {
+      problem = e;
+      continue;
+    }
+    list.forEach(({ p, r }, i) => {
+      if (found.has(r.id)) return;
+      // The planner's own order within a run, then runs nearer the distance first.
+      let s = i * 0.05 + run * 0.01;
+      if (tol !== null) {
+        const off = Math.abs(r.stats.distance - d);
+        s += (off <= tol ? 0 : 10 + off / Math.max(tol, 1)) + (0.3 * off) / Math.max(tol, 1);
+      }
+      if (difficulty) s += 3 * Math.abs(r.rating.level - (LEVELS.indexOf(difficulty) + 1));
+      found.set(r.id, { p, r, s });
+    });
+  }
+  if (!found.size) {
+    if (problem) throw problem;
+    return [];
+  }
+  const fresh = [...found.values()].filter((x) => !seen.includes(x.r.id));
+  if (!fresh.length) throw new Error('No other routes from there. Try changing the ride, or another start.');
+  return pickDiverse(net, fresh.sort((a, b) => a.s - b.s || (a.r.id < b.r.id ? -1 : 1)));
+}
+
+function plain(net: Network, request: PlanRequest, count: number | undefined, at: (lon: number, lat: number) => number, climbOf: (p: Planned) => number): { p: Planned; r: PlannedRoute }[] {
   const maxDown = request.maxDown ?? null, maxUp = request.maxUp ?? null;
   const limited = maxDown !== null || maxUp !== null;
   // With a limit, ask for spares: a route can still be too steep where two paths meet.
   const planned = new Planner(net, request).plan(count ?? (limited ? 8 : 5), climbOf);
-  const out = planned.map((p) => describe(p, at, request.finish === null, routeId(p)));
+  const out = planned.map((p) => ({ p, r: describe(p, at, request.finish === null, routeId(p)) }));
   if (!limited) return out;
-  const ok = out.filter((r) => (maxDown === null || r.stats.maxDown <= maxDown) && (maxUp === null || r.stats.maxUp <= maxUp));
+  const ok = out.filter(({ r }) => (maxDown === null || r.stats.maxDown <= maxDown) && (maxUp === null || r.stats.maxUp <= maxUp));
   if (planned.length && !ok.length) {
     const what = [maxUp !== null && `climbs to ${maxUp}%`, maxDown !== null && `descents to ${maxDown}%`].filter(Boolean).join(' and ');
     throw new Error(`No route from there keeps ${what} or less. Try a higher limit, more kinds of path, or another start.`);
   }
-  return count ? ok : ok.slice(0, 5);
+  return ok;
 }
 
 /**
@@ -158,15 +198,5 @@ export function magic({ key, request, seen = [] }: { key: string; request: Magic
     const fav = favLength ? 2 * Math.max(0, 1 - (r.favorite ?? 0) / Math.max(favWant, 1)) : 0;
     return (off <= tol ? 0 : 10 + off / Math.max(tol, 1)) + 3 * Math.abs(r.rating.level - want) + Math.abs(perKm - prof.climbPerKm) / prof.climbPerKm + (0.3 * off) / Math.max(tol, 1) + fav;
   };
-  const ranked = all.map((x) => ({ ...x, s: score(x) })).sort((a, b) => a.s - b.s || (a.r.id < b.r.id ? -1 : 1));
-  const out: typeof ranked = [];
-  for (const limit of [0.5, 0.75, 0.9, 1.01]) {
-    for (const x of ranked) {
-      if (out.length >= 5) break;
-      if (out.includes(x) || out.some((y) => overlap(net.edges, x.p, y.p) > limit)) continue;
-      out.push(x);
-    }
-    if (out.length >= Math.min(3, ranked.length)) break;
-  }
-  return out.map((x) => x.r);
+  return pickDiverse(net, all.map((x) => ({ ...x, s: score(x) })).sort((a, b) => a.s - b.s || (a.r.id < b.r.id ? -1 : 1)));
 }
