@@ -2,7 +2,7 @@
 // way the app does when it reads them, so what is saved always loads.
 import { useState, type ReactNode } from 'react';
 import type { ConfigFile, ConfigState, View } from '../core/api.ts';
-import { bandLabels, checkFile, DEFAULTS, type Band, type HeatmapConfig, type LayerDef, type MapConfig } from '../core/config.ts';
+import { bandLabels, checkFile, DEFAULTS, newMapIndex, type Band, type HeatmapConfig, type LayerDef, type MapConfig } from '../core/config.ts';
 import { trail } from './api.ts';
 
 interface Props {
@@ -243,7 +243,7 @@ function LayersSection({ value, cfg }: { value: LayerDef[]; cfg: ConfigState }) 
           <div className="form">
             {d.map((l, i) => (
               <fieldset key={l.id} className="layer">
-                <legend>{l.name || l.id} <span className="small">{l.type === 'raster' ? 'web map' : l.type === 'file' ? `file ${l.file}` : l.type === 'heatmap' ? 'your rides' : 'OpenFreeMap'}</span></legend>
+                <legend>{l.name || l.id} <span className="small">{l.type === 'raster' ? 'web map' : l.type === 'file' ? `file ${l.file}` : l.type === 'heatmap' ? 'your rides' : l.type === 'roads' ? 'lines in drawn circles' : 'OpenFreeMap'}</span></legend>
                 <div className="fields">
                   <label>Name<input value={l.name} maxLength={100} onChange={(e) => layer(i, { name: e.target.value })} /></label>
                   <label>Note<input value={l.note ?? ''} maxLength={100} placeholder="Shown after the name" onChange={(e) => layer(i, { note: e.target.value || undefined })} /></label>
@@ -265,12 +265,12 @@ function LayersSection({ value, cfg }: { value: LayerDef[]; cfg: ConfigState }) 
                   </>
                 )}
                 {l.type === 'file' && !cfg.maps[l.id] && <p className="small error">The file is not in the maps folder.</p>}
-                {l.type !== 'heatmap' && <button onClick={() => set(d.filter((_, j) => j !== i))}>Remove layer</button>}
+                {l.type !== 'heatmap' && l.type !== 'roads' && <button onClick={() => set(d.filter((_, j) => j !== i))}>Remove layer</button>}
                 {l.type === 'file' && <span className="small"> The file stays in the maps folder.</span>}
               </fieldset>
             ))}
             <button onClick={() => {
-              const at = d.findIndex((l) => l.type === 'heatmap') + 1;
+              const at = newMapIndex(d);
               const l: LayerDef = { id: freeId(), type: 'raster', name: 'Web map', on: true, opacity: 1, tiles: [], tileSize: 256, minzoom: 0, maxzoom: 19, attribution: '' };
               set([...d.slice(0, at), l, ...d.slice(at)]);
             }}>Add web map</button>

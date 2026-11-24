@@ -34,6 +34,8 @@ interface LayerBase {
 export type LayerDef =
   /** `width` scales how thick ride lines are; left out means 1. */
   | (LayerBase & { type: 'heatmap'; width?: number })
+  /** The roads and trails found in drawn circles, all circles together. */
+  | (LayerBase & { type: 'roads'; width?: number })
   | (LayerBase & { type: 'openfreemap' })
   | (LayerBase & { type: 'raster'; tiles: string[]; tileSize: number; minzoom: number; maxzoom: number; bounds?: Bounds; attribution: string })
   | (LayerBase & { type: 'file'; file: string });
@@ -72,6 +74,8 @@ export interface Problem {
 }
 
 export const HEATMAP_ID = 'heatmap';
+export const ROADS_ID = 'roads';
+const ROADS_LAYER = { id: ROADS_ID, type: 'roads', name: 'Roads and trails', on: true, opacity: 1 } as const;
 /** The zones file the app edits. Others in zones/ are read but left alone. */
 export const APP_ZONES = 'zones/zones.geojson';
 export const FILES = ['map.json', 'heatmap.json', 'layers.json'] as const;
@@ -96,6 +100,7 @@ export const DEFAULTS: Config = {
   },
   layers: [
     { id: HEATMAP_ID, type: 'heatmap', name: 'My rides', on: true, opacity: 1 },
+    { ...ROADS_LAYER },
     {
       id: 'ign', type: 'raster', name: 'Spain topo', note: 'IGN', on: false, opacity: 1,
       tiles: ['https://www.ign.es/wmts/mapa-raster?layer=MTN&style=default&tilematrixset=GoogleMapsCompatible&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}'],
@@ -310,12 +315,13 @@ export const MAX_WIDTH = 3;
 
 /** What the sidebar changes on a layer. */
 export function layerState(l: LayerDef): { id: string; on: boolean; opacity: number; width?: number } {
-  return l.type === 'heatmap' ? { id: l.id, on: l.on, opacity: l.opacity, width: l.width ?? 1 } : { id: l.id, on: l.on, opacity: l.opacity };
+  return l.type === 'heatmap' || l.type === 'roads' ? { id: l.id, on: l.on, opacity: l.opacity, width: l.width ?? 1 } : { id: l.id, on: l.on, opacity: l.opacity };
 }
 
-const LAYER_TYPES: LayerType[] = ['heatmap', 'openfreemap', 'raster', 'file'];
+const LAYER_TYPES: LayerType[] = ['heatmap', 'roads', 'openfreemap', 'raster', 'file'];
 const KNOWN: Record<LayerType, string[]> = {
   heatmap: ['width'],
+  roads: ['width'],
   openfreemap: [],
   raster: ['tiles', 'tileSize', 'minzoom', 'maxzoom', 'bounds', 'attribution'],
   file: ['file'],
@@ -352,20 +358,20 @@ function readLayers(o: Record<string, unknown> | null, problems: Problem[]): Lay
       top.bad(`${at}the id "${id}" is used twice. The second one is left out.`);
       continue;
     }
-    if (type === 'heatmap' && out.some((l) => l.type === 'heatmap')) {
-      top.bad(`${at}there can only be one "heatmap" layer. This one is left out.`);
+    if ((type === 'heatmap' || type === 'roads') && out.some((l) => l.type === type)) {
+      top.bad(`${at}there can only be one "${type}" layer. This one is left out.`);
       continue;
     }
     const f = new Fields('layers.json', raw as Record<string, unknown>, problems, ['id', 'type', 'name', 'note', 'on', 'opacity', ...KNOWN[type]], `Layer "${id}": `);
     const base: LayerBase = {
       id,
-      name: f.get('name', type === 'heatmap' ? 'My rides' : id, text(100)),
+      name: f.get('name', type === 'heatmap' ? 'My rides' : type === 'roads' ? ROADS_LAYER.name : id, text(100)),
       on: f.get('on', true, bool),
       opacity: f.get('opacity', 1, number(0.05, 1)),
     };
     const note = f.get<string | null>('note', null, text(100), 'It is left out.');
     if (note) base.note = note;
-    if (type === 'heatmap') {
+    if (type === 'heatmap' || type === 'roads') {
       const width = f.get('width', 1, number(MIN_WIDTH, MAX_WIDTH));
       out.push(width === 1 ? { ...base, type } : { ...base, type, width });
     } else if (type === 'openfreemap') out.push({ ...base, type });
@@ -402,7 +408,20 @@ function readLayers(o: Record<string, unknown> | null, problems: Problem[]): Lay
     ids.add(id);
   }
   if (!out.some((l) => l.type === 'heatmap')) out.unshift({ ...DEFAULTS.layers[0]! });
+  // Config folders from before road lines were a layer get one, just under the rides.
+  if (!out.some((l) => l.type === 'roads')) out.splice(out.findIndex((l) => l.type === 'heatmap') + 1, 0, { ...ROADS_LAYER, id: ids.has(ROADS_ID) ? freeLayerId(ids) : ROADS_ID });
   return out;
+}
+
+function freeLayerId(ids: Set<string>): string {
+  let n = 2;
+  while (ids.has(`${ROADS_ID}-${n}`)) n++;
+  return `${ROADS_ID}-${n}`;
+}
+
+/** Where a new map goes: under your rides and road lines, so it does not hide them. */
+export function newMapIndex(layers: LayerDef[]): number {
+  return Math.max(...layers.map((l, i) => (l.type === 'heatmap' || l.type === 'roads' ? i : -1))) + 1;
 }
 
 /** Why a list of tile addresses cannot be used, or null if it can. */
@@ -428,7 +447,7 @@ export function tileUrlProblem(tiles: unknown): string | null {
 const NOTES: Record<(typeof FILES)[number], string> = {
   'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. See README.md.',
   'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. radius, angle and step change how rides are matched. See README.md.',
-  'layers.json': 'Every layer, top first. Types: heatmap, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
+  'layers.json': 'Every layer, top first. Types: heatmap, roads, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
 };
 
 /** The JSON for one config file, keeping any // comments and unknown keys from `before`. */

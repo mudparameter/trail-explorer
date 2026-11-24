@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import test from 'node:test';
-import { bandLabels, checkFile, DEFAULTS, FILES, fileText, layerState, mapOrigins, parseConfig, prettyJson } from '../src/core/config.ts';
+import { bandLabels, checkFile, DEFAULTS, FILES, fileText, layerState, mapOrigins, newMapIndex, parseConfig, prettyJson } from '../src/core/config.ts';
 
 const parse = (files: Record<string, unknown>) =>
   parseConfig(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])));
@@ -88,10 +88,10 @@ test('bad layers are left out, good ones kept, and there is always one heatmap',
       ],
     },
   });
-  assert.deepEqual(config.layers.map((l) => l.id), ['heatmap', 'ok', 'g']);
-  const ok = config.layers[1]!;
+  assert.deepEqual(config.layers.map((l) => l.id), ['heatmap', 'roads', 'ok', 'g']);
+  const ok = config.layers[2]!;
   assert.ok(ok.type === 'raster' && ok.maxzoom === 15 && ok.minzoom === 0 && ok.tileSize === 256);
-  assert.deepEqual(config.layers[2], { id: 'g', type: 'file', name: 'g', on: false, opacity: 0.5, file: 'maps/home.pmtiles' });
+  assert.deepEqual(config.layers[3], { id: 'g', type: 'file', name: 'g', on: false, opacity: 0.5, file: 'maps/home.pmtiles' });
   const m = problems.map((p) => p.message).join('\n');
   for (const s of ['does not start with https', 'instead of using {s}', 'Layer "ok": "colour" is not a setting', 'id "ok" is used twice', 'short name of lower-case', '"file" should be a map in the maps folder', '"type" should be one of']) {
     assert.ok(m.includes(s), `missing: ${s}\n${m}`);
@@ -100,7 +100,20 @@ test('bad layers are left out, good ones kept, and there is always one heatmap',
 
 test('a heatmap layer moved down stays there', () => {
   const { config } = parse({ 'layers.json': { layers: [{ id: 'openfreemap', type: 'openfreemap' }, { id: 'heatmap', type: 'heatmap' }] } });
-  assert.deepEqual(config.layers.map((l) => l.id), ['openfreemap', 'heatmap']);
+  assert.deepEqual(config.layers.map((l) => l.id), ['openfreemap', 'heatmap', 'roads']);
+});
+
+test('road lines are one layer, added under the rides when missing, and new maps go below both', () => {
+  const ids = (layers: unknown[]) => parse({ 'layers.json': { layers } }).config.layers.map((l) => l.id);
+  assert.deepEqual(DEFAULTS.layers.slice(0, 2).map((l) => l.type), ['heatmap', 'roads']);
+  assert.deepEqual(ids([{ id: 'heatmap', type: 'heatmap' }, { id: 'roads', type: 'openfreemap' }]), ['heatmap', 'roads-2', 'roads']);
+  const moved = parse({ 'layers.json': { layers: [{ id: 'r', type: 'roads', width: 2, opacity: 0.5 }, { id: 'o', type: 'openfreemap' }, { id: 'heatmap', type: 'heatmap' }, { id: 'r2', type: 'roads' }] } });
+  assert.deepEqual(moved.config.layers.map((l) => l.id), ['r', 'o', 'heatmap']);
+  assert.match(moved.problems.map((p) => p.message).join(' '), /only be one "roads" layer/);
+  assert.equal(moved.config.layers[0]!.name, 'Roads and trails');
+  assert.deepEqual(layerState(moved.config.layers[0]!), { id: 'r', on: true, opacity: 0.5, width: 2 });
+  assert.equal(newMapIndex(moved.config.layers), 3);
+  assert.equal(newMapIndex(DEFAULTS.layers), 2);
 });
 
 test('ride line width is read, checked, and left out of the file when normal', () => {

@@ -3,7 +3,7 @@ import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promise
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
 import type { AreaView, Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
-import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
+import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, newMapIndex, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
 import { AREAS_FILE, areasText, checkAreaEdit, newAreaId, type Area, type AreaEdit } from '../core/areas.ts';
 import { Areas } from './areas.ts';
 import { OsmStore } from './osm.ts';
@@ -283,7 +283,12 @@ function start() {
       const o = old.find((x) => (ids[x.id] ?? x.id) === l.id);
       return o ? { ...l, on: o.on, opacity: Math.max(0.05, Math.min(1, o.opacity)) } : l;
     });
-    const rank = (l: LayerDef) => (order.includes(l.id) ? order.indexOf(l.id) : order.length);
+    const rank = (l: LayerDef): number => {
+      if (order.includes(l.id)) return order.indexOf(l.id);
+      // Road lines are newer than the saved order: keep them just under the rides.
+      const heat = layers.find((x) => x.type === 'heatmap');
+      return l.type === 'roads' && heat && order.includes(heat.id) ? order.indexOf(heat.id) + 0.5 : order.length;
+    };
     return out.map((l, i) => ({ l, i })).sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i).map((x) => x.l);
   }
 
@@ -312,7 +317,7 @@ function start() {
         continue;
       }
       ids[m.id] = id;
-      const at = layers.findIndex((l) => l.type === 'heatmap') + 1;
+      const at = newMapIndex(layers);
       layers.splice(at, 0, { id, type: 'file', name: m.info.name.slice(0, 100) || 'Map', file: `maps/${id}${ext}`, on: true, opacity: 1 });
     }
     layers = applyOld(layers, saved, ids);
@@ -476,7 +481,7 @@ function start() {
         const st = state.get(l.id);
         if (!st) return l;
         const next = { ...l, on: st.on, opacity: Math.max(0.05, Math.min(1, Math.round(st.opacity * 100) / 100)) };
-        if (next.type !== 'heatmap' || st.width === undefined || !Number.isFinite(st.width)) return next;
+        if ((next.type !== 'heatmap' && next.type !== 'roads') || st.width === undefined || !Number.isFinite(st.width)) return next;
         const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(st.width * 100) / 100));
         return width === 1 ? { ...next, width: undefined } : { ...next, width };
       })
@@ -497,7 +502,7 @@ function start() {
     const { id: _i, name: _n, ...meta } = info;
     store.saveMapInfo(`${join(cfgDir.dir, 'maps', file)}:${st.size}:${st.mtimeMs}`, meta);
     const layers = [...config.layers];
-    layers.splice(layers.findIndex((l) => l.type === 'heatmap') + 1, 0, { id, type: 'file', name: info.name, file: `maps/${file}`, on: true, opacity: 1 });
+    layers.splice(newMapIndex(layers), 0, { id, type: 'file', name: info.name, file: `maps/${file}`, on: true, opacity: 1 });
     await writeLayers(layers);
     return { ...info, id };
   });

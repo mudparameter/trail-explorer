@@ -1,7 +1,8 @@
 {
-  "//": "Every layer, top first. Types: heatmap, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.",
+  "//": "Every layer, top first. Types: heatmap, roads, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.",
   "layers": [
     { "id": "heatmap", "type": "heatmap", "name": "My rides", "on": true, "opacity": 1 },
+    { "id": "roads", "type": "roads", "name": "Roads and trails", "on": true, "opacity": 1 },
     {
       "id": "ign",
       "type": "raster",

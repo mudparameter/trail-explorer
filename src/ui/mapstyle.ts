@@ -57,6 +57,18 @@ function put(layer: any, prefix: string, opacity: number, source?: string): Laye
   return l;
 }
 
+const ROAD_WIDTHS: [number, number][] = [[10, 1.5], [14, 3], [18, 6]];
+/**
+ * Line widths by zoom, as [zoom, width] stops, scaled by a layer's width setting.
+ * `extra` is for an outline: it thins with thin lines but doesn't grow with thick ones.
+ */
+function widths(stops: [number, number][], scale = 1) {
+  return (extra: number): any => {
+    const e = extra * Math.min(1, Math.sqrt(scale));
+    return ['interpolate', ['linear'], ['zoom'], ...stops.flatMap(([z, x]) => [z, x * scale + e])];
+  };
+}
+
 export interface StyleInput {
   config: Config;
   /** Map files that could be read, by layer id. */
@@ -76,18 +88,16 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
   const sources: Record<string, SourceSpecification> = {};
   const out: LayerSpecification[] = [{ id: 'paper', type: 'background', paint: { 'background-color': config.map.background } }];
   const { bands, outline } = config.heatmap;
+  const roadColor: any = ['match', ['get', 'kind'], ...KINDS.flatMap((k) => [k.kind, k.color]), '#000000'];
+  const dim: any = selected ? ['case', ['==', ['get', 'key'], selected], 1, 0.35] : 1;
+  const roadLayout: any = { 'line-cap': 'round', 'line-join': 'round' };
   for (const def of [...config.layers].reverse()) {
     if (!def.on) continue;
     const k = def.opacity;
     const map = def.type === 'file' ? maps[def.id] : undefined;
     if (def.type === 'heatmap') {
       sources.heatmap = { type: 'geojson', data: `trail://heatmap/heatmap.json?v=${heatVersion}`, tolerance: 0.3, maxzoom: 15 };
-      // Line width scales the line and, more gently, its outline.
-      const w = def.width ?? 1;
-      const width = (extra: number): any => {
-        const e = extra * Math.min(1, Math.sqrt(w));
-        return ['interpolate', ['linear'], ['zoom'], 2, 1.6 * w + e, 9, 2 * w + e, 13, 3.5 * w + e, 16, 6 * w + e, 19, 10 * w + e];
-      };
+      const width = widths([[2, 1.6], [9, 2], [13, 3.5], [16, 6], [19, 10]], def.width);
       const layout: any = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'n'] };
       const color: any = bands.length > 1 ? ['step', ['get', 'n'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;
       const isLine: any = ['==', ['geometry-type'], 'LineString'];
@@ -106,6 +116,15 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
           id: 'heat', type: 'line', source: 'heatmap', filter: isLine, layout,
           paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': k },
         },
+      );
+    } else if (def.type === 'roads') {
+      if (!areas.length) continue;
+      // Dashed, and normally under your rides: what you have ridden shows in ride
+      // colours on top, and only what you haven't stays dashed.
+      const width = widths(ROAD_WIDTHS, def.width);
+      out.push(
+        { id: 'roads-casing', type: 'line', source: 'roads', layout: roadLayout, paint: { 'line-color': '#ffffff', 'line-width': width(2), 'line-opacity': ['*', 0.8 * k, dim] } },
+        { id: ROAD_LINES, type: 'line', source: 'roads', layout: { 'line-join': 'round' }, paint: { 'line-color': roadColor, 'line-width': width(0), 'line-opacity': ['*', k, dim], 'line-dasharray': [2, 1.5] } },
       );
     } else if (def.type === 'raster') {
       const { tiles, tileSize, minzoom, maxzoom, bounds, attribution } = def;
@@ -170,25 +189,18 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       tolerance: 0.2,
       attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
     };
-    const color: any = ['match', ['get', 'kind'], ...KINDS.flatMap((k) => [k.kind, k.color]), '#000000'];
-    const dim: any = selected ? ['case', ['==', ['get', 'key'], selected], 1, 0.35] : 1;
-    const width = (extra: number): any => ['interpolate', ['linear'], ['zoom'], 10, 1.5 + extra, 14, 3 + extra, 18, 6 + extra];
-    const layout: any = { 'line-cap': 'round', 'line-join': 'round' };
-    // Roads go under your rides, dashed: what you have ridden shows in ride
-    // colours on top, and only what you haven't stays dashed.
-    const under = out.findIndex((l) => l.id === 'heat-dots');
-    out.splice(under < 0 ? out.length : under, 0,
+    // The circles stay on top, even with road lines off or moved down.
+    out.push(
       { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
       // Areas still downloading have a fainter, finer edge.
       { id: 'roads-area-line', type: 'line', source: 'roads-area', paint: { 'line-color': AREA_COLOR, 'line-width': ['case', ['get', 'ready'], 2, 1.5], 'line-opacity': ['case', ['get', 'ready'], 1, 0.6], 'line-dasharray': [3, 2] } },
-      { id: 'roads-casing', type: 'line', source: 'roads', layout, paint: { 'line-color': '#ffffff', 'line-width': width(2), 'line-opacity': ['*', 0.8, dim] } },
-      { id: ROAD_LINES, type: 'line', source: 'roads', layout: { 'line-join': 'round' }, paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': dim, 'line-dasharray': [2, 1.5] } },
     );
     if (selected) {
       const only: any = ['==', ['get', 'key'], selected];
+      const width = widths(ROAD_WIDTHS, config.layers.find((l) => l.type === 'roads')?.width);
       out.push(
-        { id: 'roads-selected-halo', type: 'line', source: 'roads', filter: only, layout, paint: { 'line-color': '#facc15', 'line-width': width(8) } },
-        { id: 'roads-selected', type: 'line', source: 'roads', filter: only, layout, paint: { 'line-color': color, 'line-width': width(2) } },
+        { id: 'roads-selected-halo', type: 'line', source: 'roads', filter: only, layout: roadLayout, paint: { 'line-color': '#facc15', 'line-width': width(8) } },
+        { id: 'roads-selected', type: 'line', source: 'roads', filter: only, layout: roadLayout, paint: { 'line-color': roadColor, 'line-width': width(2) } },
       );
     }
   }

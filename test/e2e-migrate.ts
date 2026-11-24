@@ -43,11 +43,11 @@ const files = Object.fromEntries(['map.json', 'heatmap.json', 'layers.json'].map
 const { config, problems } = parseConfig(files);
 assert.deepEqual(problems, []);
 console.log(config.layers.map((l) => `${l.id} ${l.on} ${l.opacity}`).join('\n'));
-assert.deepEqual(config.layers.map((l) => l.id), ['heatmap', 'home-trails', 'ign', 'opentopomap', 'openfreemap']);
-const home = config.layers[1]!;
+assert.deepEqual(config.layers.map((l) => l.id), ['heatmap', 'roads', 'home-trails', 'ign', 'opentopomap', 'openfreemap']);
+const home = config.layers[2]!;
 assert.ok(home.type === 'file' && home.file === 'maps/home-trails.mbtiles' && home.name === 'Home trails' && home.opacity === 0.6 && home.on);
-assert.ok(config.layers[2]!.on && config.layers[2]!.opacity === 0.5, 'Spain topo kept on and faded');
-assert.equal(config.layers[4]!.on, false, 'world map kept off');
+assert.ok(config.layers[3]!.on && config.layers[3]!.opacity === 0.5, 'Spain topo kept on and faded');
+assert.equal(config.layers[5]!.on, false, 'world map kept off');
 assert.ok(existsSync(join(cfg, 'maps', 'home-trails.mbtiles')), 'map moved into the config folder');
 assert.deepEqual(readdirSync(join(data, 'maps')), [], 'old copy removed');
 const after = new DatabaseSync(join(data, 'trail-explorer.db'));

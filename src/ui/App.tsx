@@ -23,7 +23,7 @@ function withStates(config: Config, states: LayerState[]): Config {
   const layers = config.layers
     .map((l) => ({ l, at: byId.get(l.id) }))
     .sort((a, b) => (a.at?.i ?? 1e9) - (b.at?.i ?? 1e9))
-    .map(({ l, at }) => (at ? ({ ...l, on: at.s.on, opacity: at.s.opacity, ...(l.type === 'heatmap' ? { width: at.s.width } : {}) } as LayerDef) : l));
+    .map(({ l, at }) => (at ? ({ ...l, on: at.s.on, opacity: at.s.opacity, ...(l.type === 'heatmap' || l.type === 'roads' ? { width: at.s.width } : {}) } as LayerDef) : l));
   return { ...config, layers };
 }
 

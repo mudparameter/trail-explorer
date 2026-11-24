@@ -249,6 +249,18 @@ await shot('15-roads');
 const order = await w.evaluate(() => (window as any).__map.getStyle().layers.map((l: any) => l.id));
 assert.ok(order.indexOf('roads-line') < order.indexOf('heat-outline'), 'roads under rides');
 assert.ok(await w.evaluate(() => !!(window as any).__map.getPaintProperty('roads-line', 'line-dasharray')), 'roads dashed');
+// One Roads and trails layer sets opacity and width for every circle, and is saved.
+const roadPaint = (p: string) => w.evaluate((p) => JSON.stringify((window as any).__map.getPaintProperty('roads-line', p)), p);
+const roadWidth = await roadPaint('line-width');
+await w.getByLabel('Roads and trails line width').fill('2.5');
+await w.getByLabel('Roads and trails opacity').fill('0.5');
+const roadsLayer = () => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).layers.find((l: any) => l.type === 'roads');
+await waitFor(() => roadsLayer()?.width === 2.5 && roadsLayer()?.opacity === 0.5, 'road width and opacity saved');
+await w.waitForFunction((n) => JSON.stringify((window as any).__map.getPaintProperty('roads-line', 'line-width')) !== n, roadWidth);
+assert.match(await roadPaint('line-opacity'), /0\.5/);
+await w.getByLabel('Roads and trails line width').dblclick();
+await w.getByLabel('Roads and trails opacity').fill('1');
+await waitFor(() => roadsLayer()?.width === undefined && roadsLayer()?.opacity === 1, 'road settings reset');
 
 // A second circle inside the first is ready at once, with nothing downloaded.
 const calls = overpass.calls;

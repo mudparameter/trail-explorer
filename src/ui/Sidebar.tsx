@@ -125,7 +125,7 @@ export function Sidebar(p: Props) {
                 <input type="range" min={0.1} max={1} step={0.05} value={l.opacity} aria-label={`${l.name} opacity`} title="Opacity"
                   onChange={(e) => set(l.id, { opacity: Number(e.target.value) })} />
               )}
-              {l.on && l.type === 'heatmap' && (
+              {l.on && (l.type === 'heatmap' || l.type === 'roads') && (
                 <label className="small slider">
                   Line width
                   <input type="range" min={MIN_WIDTH} max={MAX_WIDTH} step={0.05} value={l.width ?? 1} aria-label={`${l.name} line width`} title="Line width"

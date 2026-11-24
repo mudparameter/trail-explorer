@@ -76,6 +76,7 @@ Keep this folder private if it has zones in it: they show where you live.
 {
   "layers": [
     { "id": "heatmap", "type": "heatmap", "name": "My rides", "on": true, "opacity": 1 },
+    { "id": "roads", "type": "roads", "name": "Roads and trails", "on": true, "opacity": 1 },
     { "id": "home", "type": "file", "name": "Home trails", "file": "maps/home.pmtiles", "on": true, "opacity": 1 },
     { "id": "topo", "type": "raster", "name": "Topo", "note": "OpenTopoMap",
       "tiles": ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png"],
@@ -91,6 +92,9 @@ digits, - and _), a `name`, and optionally a `note`, `on` and `opacity`
 
 - `heatmap`: your rides. There is always exactly one. Optional `width` (0.25 to
   3, normally 1) makes the ride lines thinner or thicker.
+- `roads`: the roads and trails found in the circles you draw (see areas.json),
+  dashed. There is always exactly one, normally just under your rides so
+  ridden trails show in ride colours. It takes the same optional `width`.
 - `openfreemap`: the OpenFreeMap world map, with the bundled style.
 - `raster`: picture tiles from the web. `tiles` lists one or more https
   addresses with {z}, {x} and {y} in them; list each server separately rather
