@@ -14,7 +14,7 @@ export const KINDS: { kind: RoadKind; label: string; color: string }[] = [
 
 /** One road or trail: every OpenStreetMap way with the same name and kind, or all unnamed ways of a kind. */
 export interface Road {
-  /** Stable within one search, for selecting. */
+  /** Stable within one area, for selecting. */
   key: string;
   /** Null when OpenStreetMap has no name for it. */
   name: string | null;
@@ -33,6 +33,8 @@ export interface Road {
 }
 
 export const MIN_AREA = 50;
+/** Shorter than this inside a circle is left out. */
+const MIN_ROAD = 10;
 export const MAX_AREA = 10_000;
 /** Public Overpass servers are often busy, so the config may list several to try in order. */
 export const DEFAULT_OVERPASS = ['https://overpass-api.de/api/interpreter'];
@@ -47,14 +49,109 @@ const HIGHWAY: Record<string, RoadKind> = {
   unclassified: 'road', residential: 'road', living_street: 'road', service: 'road', road: 'road',
 };
 
-/** The Overpass QL for every road and trail within `radius` metres. Pavements, crossings and car park lanes are left out. */
-export function overpassQuery(center: [number, number], radius: number): string {
-  const [lon, lat] = center;
-  const kinds = Object.keys(HIGHWAY).join('|');
-  const at = `(around:${Math.round(radius)},${lat.toFixed(6)},${lon.toFixed(6)})`;
-  return `[out:json][timeout:90];
-way["highway"~"^(${kinds})$"]["area"!="yes"]["footway"!~"^(sidewalk|crossing)$"]["service"!~"^(parking_aisle|drive-through)$"]${at};
-out tags geom;`;
+export const kindOf = (tags: Record<string, string>): RoadKind | undefined => HIGHWAY[tags.highway ?? ''];
+
+// --- tiles ----------------------------------------------------------------------
+// Data is downloaded and kept by fixed map tiles, not by circle, so circles that
+// overlap share it: a new circle only downloads the tiles nothing has asked for yet.
+
+/** Zoom 15 tiles are about 1.2 km across at the equator, 0.9 km in Spain. */
+export const TILE_ZOOM = 15;
+const N = 2 ** TILE_ZOOM;
+/** A tile as one number. */
+export const tileKey = (x: number, y: number) => y * N + x;
+export const tileXY = (k: number): [number, number] => [k % N, Math.floor(k / N)];
+const lonX = (lon: number) => Math.min(N - 1, Math.max(0, Math.floor(((lon + 180) / 360) * N)));
+const latY = (lat: number) => {
+  const r = (Math.max(-85, Math.min(85, lat)) * Math.PI) / 180;
+  return Math.min(N - 1, Math.max(0, Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * N)));
+};
+const xLon = (x: number) => (x / N) * 360 - 180;
+const yLat = (y: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / N))) * 180) / Math.PI;
+/** [west, south, east, north] of a tile. */
+export function tileBounds(k: number): Bounds {
+  const [x, y] = tileXY(k);
+  return [xLon(x), yLat(y + 1), xLon(x + 1), yLat(y)];
+}
+/** Every tile in a box. Ways can be long, so this is capped. */
+export function tilesInBounds([w, s, e, n]: Bounds, max = 40_000): number[] {
+  const out: number[] = [];
+  const [x0, x1, y0, y1] = [lonX(w), lonX(e), latY(n), latY(s)];
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > max) return out;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push(tileKey(x, y));
+  return out;
+}
+export function circleBounds(center: [number, number], radius: number): Bounds {
+  const dLat = radius / M_PER_DEG;
+  const dLon = dLat / Math.max(Math.cos((center[1] * Math.PI) / 180), 0.01);
+  return [center[0] - dLon, center[1] - dLat, center[0] + dLon, center[1] + dLat];
+}
+/** The tiles a circle touches, sorted. */
+export function tilesFor(center: [number, number], radius: number): number[] {
+  const pr = projector(center);
+  return tilesInBounds(circleBounds(center, radius)).filter((k) => {
+    const [w, s, e, n] = tileBounds(k);
+    // Nearest point of the tile to the centre.
+    const [x, y] = pr.to([Math.max(w, Math.min(e, center[0])), Math.max(s, Math.min(n, center[1]))]);
+    return x * x + y * y <= radius * radius;
+  }).sort((a, b) => a - b);
+}
+
+/** The Overpass QL for every road and trail in these tiles. Pavements, crossings and car park lanes are left out. */
+export function overpassQuery(tiles: number[]): string {
+  // Neighbouring tiles in a row become one box.
+  const rows = new Map<number, number[]>();
+  for (const k of tiles) {
+    const [x, y] = tileXY(k);
+    rows.set(y, [...(rows.get(y) ?? []), x]);
+  }
+  const boxes: Bounds[] = [];
+  for (const [y, xs] of rows) {
+    xs.sort((a, b) => a - b);
+    let start = xs[0]!;
+    xs.forEach((x, i) => {
+      if (xs[i + 1] === x + 1) return;
+      const [w, s] = tileBounds(tileKey(start, y));
+      const [, , e, n] = tileBounds(tileKey(x, y));
+      boxes.push([w, s, e, n]);
+      start = xs[i + 1]!;
+    });
+  }
+  const f = (v: number) => v.toFixed(7);
+  const filter = `way["highway"~"^(${Object.keys(HIGHWAY).join('|')})$"]["area"!="yes"]["footway"!~"^(sidewalk|crossing)$"]["service"!~"^(parking_aisle|drive-through)$"]`;
+  return `[out:json][timeout:120];
+(
+${boxes.map(([w, s, e, n]) => `${filter}(${f(s)},${f(w)},${f(n)},${f(e)});`).join('\n')}
+);
+out geom;`;
+}
+
+// --- ways -----------------------------------------------------------------------
+
+/** One OpenStreetMap way, as kept in the shared store. Node ids join ways where they meet, for routes. */
+export interface OsmWay {
+  id: number;
+  tags: Record<string, string>;
+  nodes: number[];
+  coords: [number, number][];
+}
+
+/** The ways in an Overpass reply. Throws when it is not one. */
+export function parseOverpass(reply: unknown): OsmWay[] {
+  const els = (reply as { elements?: unknown })?.elements;
+  if (!Array.isArray(els)) throw new Error('The map data server sent something unexpected.');
+  const out: OsmWay[] = [];
+  for (const el of els) {
+    if (el?.type !== 'way' || !Number.isSafeInteger(el.id) || !Array.isArray(el.geometry)) continue;
+    const tags: Record<string, string> = el.tags && typeof el.tags === 'object' ? el.tags : {};
+    if (!kindOf(tags)) continue;
+    const g = el.geometry as { lon?: unknown; lat?: unknown }[];
+    const nodes: unknown[] = Array.isArray(el.nodes) ? el.nodes : [];
+    if (nodes.length !== g.length || g.length < 2) continue;
+    if (!g.every((p) => typeof p?.lon === 'number' && typeof p?.lat === 'number') || !nodes.every(Number.isSafeInteger)) continue;
+    out.push({ id: el.id, tags, nodes: nodes as number[], coords: g.map((p) => [p.lon as number, p.lat as number]) });
+  }
+  return out;
 }
 
 /** Local flat coordinates in metres around the circle's centre. Accurate enough for 10 km. */
@@ -142,21 +239,14 @@ function difficulty(t: Record<string, string>): string | null {
 }
 const top = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
-/** Reads an Overpass reply into roads inside the circle, longest first within each kind. */
-export function readOverpass(reply: unknown, center: [number, number], radius: number): Road[] {
-  const els = (reply as { elements?: unknown })?.elements;
-  if (!Array.isArray(els)) throw new Error('The map data server sent something unexpected.');
+/** The roads and trails inside a circle, from ways, longest first within each kind. */
+export function roadsIn(ways: OsmWay[], center: [number, number], radius: number): Road[] {
   const groups = new Map<string, Road & { surfaces: Map<string, number>; levels: Map<string, number> }>();
-  for (const el of els) {
-    if (el?.type !== 'way' || !Array.isArray(el.geometry)) continue;
-    const t: Record<string, string> = el.tags && typeof el.tags === 'object' ? el.tags : {};
-    const kind = HIGHWAY[t.highway ?? ''];
+  for (const way of ways) {
+    const t = way.tags;
+    const kind = kindOf(t);
     if (!kind) continue;
-    const line = (el.geometry as { lon: unknown; lat: unknown }[])
-      .filter((p) => typeof p?.lon === 'number' && typeof p?.lat === 'number')
-      .map((p) => [p.lon, p.lat] as [number, number]);
-    if (line.length < 2) continue;
-    const clipped = clipToCircle(line, center, radius);
+    const clipped = clipToCircle(way.coords, center, radius);
     if (!clipped.lines.length || clipped.length < 1) continue;
     const name = (t.name ?? t.ref ?? '').trim() || null;
     const key = `${kind}:${name?.toLowerCase() ?? ''}`;
@@ -178,18 +268,30 @@ export function readOverpass(reply: unknown, center: [number, number], radius: n
   }
   const order = KINDS.map((k) => k.kind);
   return [...groups.values()]
+    // Slivers where a way just touches the edge are noise.
+    .filter((r) => r.length >= MIN_ROAD)
     .map(({ surfaces, levels, ...r }) => ({ ...r, surface: top(surfaces)?.replace(/_/g, ' ') ?? null, difficulty: top(levels), length: Math.round(r.length) }))
     // Named first, then by length, so the unnamed group comes last in each kind.
     .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || Number(a.name === null) - Number(b.name === null) || b.length - a.length);
 }
 
-/** Roads as map lines, for drawing. */
-export function roadsGeoJson(roads: Road[]): FeatureCollection {
+/** Reads an Overpass reply straight into roads inside a circle. */
+export const readOverpass = (reply: unknown, center: [number, number], radius: number): Road[] => roadsIn(parseOverpass(reply), center, radius);
+
+/** Total length of each kind. */
+export function kindTotals(roads: Road[]): Partial<Record<RoadKind, number>> {
+  const out: Partial<Record<RoadKind, number>> = {};
+  for (const r of roads) out[r.kind] = (out[r.kind] ?? 0) + r.length;
+  return out;
+}
+
+/** Roads as map lines, for drawing. `prefix` keeps keys apart when several areas are drawn. */
+export function roadsGeoJson(roads: Road[], prefix = ''): FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: roads.map((r) => ({
       type: 'Feature',
-      properties: { key: r.key, kind: r.kind, name: r.name ?? '' },
+      properties: { key: prefix + r.key, kind: r.kind, name: r.name ?? '' },
       geometry: { type: 'MultiLineString', coordinates: r.lines },
     })),
   };

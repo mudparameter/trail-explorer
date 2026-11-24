@@ -1,7 +1,8 @@
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
 import type { Config, FILES, Problem } from './config.ts';
-import type { Road } from './roads.ts';
+import type { Area, AreaEdit } from './areas.ts';
+import type { Road, RoadKind } from './roads.ts';
 import type { CircleEdit } from './zones.ts';
 
 export interface SyncStatus {
@@ -62,6 +63,19 @@ export interface ConfigState {
   /** Map files that could be read, by layer id. */
   maps: Record<string, MapInfo>;
 }
+/** An area, with how its download is going and what it holds. */
+export interface AreaView extends Area {
+  /** ready: all its data is here. queued: waiting for a download slot. */
+  state: 'ready' | 'queued' | 'downloading' | 'error';
+  error: string | null;
+  /** Tiles of data downloaded, of the tiles it needs. */
+  done: number;
+  total: number;
+  /** Changes when its roads change, so the window knows to fetch them again. 0 until ready. */
+  version: number;
+  /** Metres of each kind inside the circle. */
+  totals: Partial<Record<RoadKind, number>>;
+}
 export type ConfigFile = (typeof FILES)[number];
 export type Result<T = void> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -95,6 +109,14 @@ export interface TrailApi {
   getSaved(): Promise<Saved>;
   saveView(view: View): Promise<void>;
   saveShowZones(on: boolean): Promise<void>;
-  /** Every road and trail within `radius` metres, from OpenStreetMap. Needs the internet. */
-  findRoads(center: [number, number], radius: number): Promise<Result<Road[]>>;
+  getAreas(): Promise<AreaView[]>;
+  onAreas(fn: (a: AreaView[]) => void): () => void;
+  /** The roads and trails in an area. Empty until it is ready. */
+  getAreaRoads(id: string): Promise<Result<{ version: number; roads: Road[] }>>;
+  /** Saves a new area and starts downloading its data. Returns its id. */
+  addArea(area: { center: [number, number]; radius: number; name?: string | null }): Promise<Result<string>>;
+  editArea(id: string, edit: AreaEdit): Promise<Result>;
+  /** Removes an area. Data another area also uses is kept. */
+  removeArea(id: string): Promise<Result>;
+  retryArea(id: string): Promise<Result>;
 }

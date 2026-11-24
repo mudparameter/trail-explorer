@@ -31,8 +31,16 @@ rides.push({ id: 9999, type: 'virtual_ride', body: zipOf('a.fit', fit(path(climb
 
 const f = await fakeGarmin({ rides, delay: 20 });
 
-// A fake Overpass server: busy the first time, then a trail, a track and a road through the centre asked for.
-const overpass = { queries: [] as string[], calls: 0 };
+// A fake Overpass server: busy the first time, then answers like Overpass with the
+// ways of a small world that cross the boxes asked for.
+const MID = P(2000, 0);
+const Q = (x: number, y: number): [number, number] => [MID[0] + x / (K * C), MID[1] + y / K];
+const WORLD = [
+  { id: 1, tags: { highway: 'path', name: 'Ridge trail', 'mtb:scale': '2', surface: 'dirt' }, pts: [Q(-900, 0), Q(0, 0), Q(900, 0)], nodes: [11, 12, 13] },
+  { id: 2, tags: { highway: 'track', tracktype: 'grade3' }, pts: [Q(0, -900), Q(0, 0), Q(0, 900)], nodes: [21, 12, 23] },
+  { id: 3, tags: { highway: 'residential', name: 'High Street' }, pts: [Q(-900, -150), Q(900, -100)], nodes: [31, 32] },
+];
+const overpass = { calls: 0, boxes: 0 };
 const ops = createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
@@ -43,15 +51,13 @@ const ops = createServer((req, res) => {
       return;
     }
     const q = new URLSearchParams(body).get('data') ?? '';
-    overpass.queries.push(q);
-    const [, r, lat, lon] = q.match(/around:(\d+),([-\d.]+),([-\d.]+)/)!.map(Number) as number[];
-    const dLat = (r! * 2) / K, dLon = dLat / Math.cos((lat! * Math.PI) / 180);
-    const line = (a: number, b: number, c: number, d: number) => [{ lon: lon! + a * dLon, lat: lat! + b * dLat }, { lon: lon! + c * dLon, lat: lat! + d * dLat }];
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ elements: [
-      { type: 'way', tags: { highway: 'path', name: 'Ridge trail', 'mtb:scale': '2', surface: 'dirt' }, geometry: line(-1, 0, 1, 0) },
-      { type: 'way', tags: { highway: 'track', tracktype: 'grade3' }, geometry: line(0, -1, 0, 1) },
-      { type: 'way', tags: { highway: 'residential', name: 'High Street' }, geometry: line(-1, -0.1, 1, 0.1) },
-    ] }));
+    const boxes = [...q.matchAll(/\(([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)\);/g)].map((m) => m.slice(1).map(Number));
+    overpass.boxes += boxes.length;
+    // Close enough for a test: a way counts when one of its points, or its middle, is in a box.
+    const hit = (pts: [number, number][]) => boxes.some(([s, w, n, e]) => [...pts, pts[1]!].some(([x, y]) => x >= w! && x <= e! && y >= s! && y <= n!));
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+      elements: WORLD.filter((wy) => hit(wy.pts)).map((wy) => ({ type: 'way', id: wy.id, tags: wy.tags, nodes: wy.nodes, geometry: wy.pts.map(([lon, lat]) => ({ lon, lat })) })),
+    }));
   });
 });
 await new Promise<void>((ok) => ops.listen(0, '127.0.0.1', ok));
@@ -199,41 +205,75 @@ await w.waitForFunction(() => !(window as any).__map.getLayer('heat'));
 await w.getByRole('checkbox', { name: 'My rides' }).check();
 await w.waitForFunction(() => !!(window as any).__map.getLayer('heat'));
 
-// Roads and trails: draw a circle, get a list from (fake) OpenStreetMap, pick one.
-await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 14 }), P(2000, 0));
+// Roads and trails: circles are saved in areas.json, their data is downloaded once
+// and shared, and each can be named, hidden, filtered and deleted.
+const areasFile = () => JSON.parse(readFileSync(cfgFile('areas.json'), 'utf8')).areas as any[];
+const areaRow = (i: number) => w.locator('.areas > li').nth(i);
+await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 14 }), MID);
 await w.waitForTimeout(500);
-await w.getByRole('button', { name: 'Draw a circle' }).click();
-await w.getByText('Click the centre of the area').waitFor();
 const mb = (await w.locator('.map').boundingBox())!;
-const cx = mb.x + mb.width / 2, cy = mb.y + mb.height / 2;
-await w.mouse.click(cx, cy);
-await w.mouse.move(cx + 60, cy, { steps: 4 });
-await w.mouse.move(cx + 120, cy, { steps: 4 });
-await w.getByText(/Radius \d+ m\. Click again/).waitFor();
-assert.ok(await w.evaluate(() => (window as any).__map.getStyle().sources.draw.data.type) !== undefined);
-await w.mouse.click(cx + 120, cy);
-await w.getByText('Searching OpenStreetMap').waitFor();
+const midPx = await w.evaluate(([x, y]) => (window as any).__map.project([x, y]), MID);
+const cx = mb.x + midPx.x, cy = mb.y + midPx.y;
+const draw = async (r: number) => {
+  await w.getByRole('button', { name: 'Draw a circle' }).click();
+  await w.getByText('Click the centre of the area').waitFor();
+  await w.mouse.click(cx, cy);
+  await w.mouse.move(cx + r / 2, cy, { steps: 3 });
+  await w.mouse.move(cx + r, cy, { steps: 3 });
+  await w.getByText(/Radius \d+ m\. Click again/).waitFor();
+  await w.mouse.click(cx + r, cy);
+};
+await draw(120);
+await waitFor(() => existsSync(cfgFile('areas.json')) && areasFile().length === 1, 'area saved');
+const first = areasFile()[0];
+console.log('area 1', JSON.stringify(first));
+assert.ok(first.radius > 300 && first.radius < 600 && first.on === true && /^[a-z0-9]{6}$/.test(first.id));
 await w.getByRole('button', { name: /Ridge trail/ }).waitFor({ timeout: 20000 });
 assert.equal(overpass.calls, 2, 'a busy server is asked again');
-assert.match(overpass.queries[0]!, /highway/);
-const radius = Number(overpass.queries[0]!.match(/around:(\d+)/)![1]);
-console.log('searched radius', radius);
-assert.ok(radius > 100 && radius < 600, 'radius from the drag');
 await w.getByText('MTB S2').waitFor();
 await w.getByRole('button', { name: /High Street/ }).waitFor();
-await w.getByRole('button', { name: /Unnamed/ }).waitFor();
+await w.locator('.roads').getByRole('button', { name: /^Unnamed/ }).waitFor();
+await areaRow(0).getByText(/trails · .* tracks · .* roads/).waitFor();
 await w.waitForTimeout(600); await idle();
 await shot('15-roads');
-// Pick from the list, then from the map.
+
+// A second circle inside the first is ready at once, with nothing downloaded.
+const calls = overpass.calls;
+await draw(50);
+await waitFor(() => areasFile().length === 2, 'second area saved');
+await areaRow(1).getByText(/trails/).waitFor();
+assert.equal(overpass.calls, calls, 'shared data is not downloaded again');
+
+// Name, filter and hide.
+await areaRow(0).getByRole('button', { name: /Details of/ }).click();
+await areaRow(0).getByPlaceholder('Optional').fill('Ridge loop');
+await areaRow(0).getByPlaceholder('Optional').press('Enter');
+await waitFor(() => areasFile()[0].name === 'Ridge loop', 'name saved');
+await areaRow(0).getByRole('checkbox', { name: /^Roads/ }).uncheck();
+await waitFor(() => JSON.stringify(areasFile()[0].hide) === '["road"]', 'hidden kind saved');
+await areaRow(0).getByRole('button', { name: 'List roads and trails' }).click();
+await w.locator('.roads header').getByText('Ridge loop').waitFor();
+await w.getByRole('button', { name: /High Street/ }).waitFor({ state: 'detached' });
+await areaRow(1).getByRole('checkbox').first().uncheck();
+await waitFor(() => areasFile()[1].on === false, 'area turned off');
 await w.getByRole('button', { name: /Ridge trail/ }).click();
 await w.waitForFunction(() => !!(window as any).__map.getLayer('roads-selected'));
 assert.equal(await w.getByRole('button', { name: /Ridge trail/ }).getAttribute('aria-pressed'), 'true');
 await w.waitForTimeout(600); await idle();
 await shot('16-roads-selected');
-await w.getByRole('checkbox', { name: /Roads/ }).uncheck();
-await w.getByRole('button', { name: /High Street/ }).waitFor({ state: 'detached' });
-await w.getByRole('button', { name: 'Clear the search' }).click();
-await w.waitForFunction(() => !(window as any).__map.getLayer('roads-line'));
+
+// Deleting the first keeps the data the second uses.
+await areaRow(0).getByRole('button', { name: 'Delete Ridge loop' }).click();
+await w.getByRole('button', { name: 'Delete', exact: true }).click();
+await waitFor(() => areasFile().length === 1, 'area deleted');
+await w.locator('.areas > li').nth(1).waitFor({ state: 'detached' });
+await areaRow(0).getByRole('checkbox').first().check();
+await areaRow(0).getByText(/trails/).waitFor();
+await areaRow(0).getByRole('button', { name: /Details of/ }).click();
+await areaRow(0).getByRole('button', { name: 'List roads and trails' }).click();
+await w.getByRole('button', { name: /Ridge trail/ }).waitFor();
+assert.equal(overpass.calls, calls);
+await w.getByRole('button', { name: 'Close the list' }).click();
 // Escape stops drawing.
 await w.getByRole('button', { name: 'Draw a circle' }).click();
 await w.keyboard.press('Escape');
@@ -263,6 +303,9 @@ assert.ok(Math.abs(await w.evaluate(() => (window as any).__map.getZoom()) - 1.5
 assert.ok(await w.getByRole('checkbox', { name: 'Spain topo' }).isChecked());
 await w.waitForTimeout(1500);
 assert.equal(f.downloads.length, n);
+// The area and its roads are still there, without downloading again.
+await areaRow(0).getByText(/trails/).waitFor();
+assert.equal(overpass.calls, calls);
 
 // Key stops working: map stays
 f.opts.rejectKey = true;

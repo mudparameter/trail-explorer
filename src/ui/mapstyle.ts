@@ -12,12 +12,15 @@ export const DRAW = 'draw';
 export const AREA_COLOR = '#1d4ed8';
 export const ROAD_LINES = 'roads-line';
 
-/** A search for roads and trails, and what it found. */
-export interface Explore {
+/** Separates an area's id from a road's key in map features. */
+export const KEY_SEP = '|';
+/** An area to draw, with the roads to show in it. */
+export interface StyleArea {
+  id: string;
   center: [number, number];
   radius: number;
+  ready: boolean;
   roads: Road[];
-  selected: string | null;
 }
 
 export interface Bundled {
@@ -64,10 +67,12 @@ export interface StyleInput {
   showZones: boolean;
   /** Clicks are drawing a circle. */
   drawing?: boolean;
-  explore?: Explore | null;
+  areas?: StyleArea[];
+  /** The selected road, as area id + KEY_SEP + road key. */
+  selected?: string | null;
 }
 
-export function buildStyle({ config, maps, bundled, heatVersion, showZones, drawing, explore }: StyleInput): StyleSpecification {
+export function buildStyle({ config, maps, bundled, heatVersion, showZones, drawing, areas = [], selected = null }: StyleInput): StyleSpecification {
   const sources: Record<string, SourceSpecification> = {};
   const out: LayerSpecification[] = [{ id: 'paper', type: 'background', paint: { 'background-color': config.map.background } }];
   const { bands, outline } = config.heatmap;
@@ -146,25 +151,33 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       { id: 'zones-line', type: 'line', source: ZONES, paint: { 'line-color': ZONE_COLOR, 'line-width': 2, 'line-dasharray': [2, 1.5] } },
     );
   }
-  if (explore) {
-    sources['roads-area'] = { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circleRing(explore.center, explore.radius, 120)] } } };
+  if (areas.length) {
+    sources['roads-area'] = {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: areas.map((a) => ({ type: 'Feature', properties: { id: a.id, ready: a.ready }, geometry: { type: 'Polygon', coordinates: [circleRing(a.center, a.radius, 120)] } })),
+      },
+    };
     sources.roads = {
-      type: 'geojson', data: roadsGeoJson(explore.roads), tolerance: 0.2,
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: areas.flatMap((a) => roadsGeoJson(a.roads, a.id + KEY_SEP).features) },
+      tolerance: 0.2,
       attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
     };
     const color: any = ['match', ['get', 'kind'], ...KINDS.flatMap((k) => [k.kind, k.color]), '#000000'];
-    const sel = explore.selected;
-    const dim: any = sel ? ['case', ['==', ['get', 'key'], sel], 1, 0.35] : 1;
+    const dim: any = selected ? ['case', ['==', ['get', 'key'], selected], 1, 0.35] : 1;
     const width = (extra: number): any => ['interpolate', ['linear'], ['zoom'], 10, 1.5 + extra, 14, 3 + extra, 18, 6 + extra];
     const layout: any = { 'line-cap': 'round', 'line-join': 'round' };
     out.push(
-      { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': 0.06 } },
-      { id: 'roads-area-line', type: 'line', source: 'roads-area', paint: { 'line-color': AREA_COLOR, 'line-width': 2, 'line-dasharray': [3, 2] } },
+      { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
+      // Areas still downloading have a fainter, finer edge.
+      { id: 'roads-area-line', type: 'line', source: 'roads-area', paint: { 'line-color': AREA_COLOR, 'line-width': ['case', ['get', 'ready'], 2, 1.5], 'line-opacity': ['case', ['get', 'ready'], 1, 0.6], 'line-dasharray': [3, 2] } },
       { id: 'roads-casing', type: 'line', source: 'roads', layout, paint: { 'line-color': '#ffffff', 'line-width': width(2), 'line-opacity': dim } },
       { id: ROAD_LINES, type: 'line', source: 'roads', layout, paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': dim } },
     );
-    if (sel) {
-      const only: any = ['==', ['get', 'key'], sel];
+    if (selected) {
+      const only: any = ['==', ['get', 'key'], selected];
       out.push(
         { id: 'roads-selected-halo', type: 'line', source: 'roads', filter: only, layout, paint: { 'line-color': '#facc15', 'line-width': width(8) } },
         { id: 'roads-selected', type: 'line', source: 'roads', filter: only, layout, paint: { 'line-color': color, 'line-width': width(2) } },

@@ -44,6 +44,13 @@ progress { width: 100%; }
 .roads .road[aria-pressed='true'] { background: #fef3c7; }
 .roads .road .detail { grid-column: 1 / -1; color: #666; }
 .roads .credit { color: #666; }
+.areas p.small { margin: 2px 0 0; }
+.area-details { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; padding: 6px 0 2px 22px; }
+.area-details label.small { display: flex; flex-direction: column; gap: 2px; }
+.area-details .kinds { display: flex; flex-direction: column; gap: 3px; }
+.area-details .kind-head, .roads .kind-head { display: flex; align-items: center; gap: 6px; }
+.area-details .kind-head { font-weight: normal; }
+.swatch { display: inline-block; width: 14px; height: 4px; border-radius: 2px; flex: none; }
 .notice { padding: 6px 12px; background: #fff6cc; border-bottom: 1px solid #bbb; }
 .page { max-width: 620px; padding: 20px 24px; overflow-y: auto; }
 .form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; max-width: 420px; margin: 10px 0; }

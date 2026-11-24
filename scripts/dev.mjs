@@ -45,6 +45,16 @@ if (existsSync(join(real, db)) && (again || !existsSync(join(dev, db)))) {
   if (existsSync(join(real, 'maps'))) cpSync(join(real, 'maps'), join(dev, 'maps'), { recursive: true, mode: constants.COPYFILE_FICLONE });
   console.log(`Copied ${n} rides into the development copy.`);
 }
+// Downloaded roads and trails, so the dev copy's areas need not download them again.
+const osm = 'osm.db';
+if (existsSync(join(real, osm)) && (again || !existsSync(join(dev, osm)))) {
+  mkdirSync(dev, { recursive: true });
+  for (const f of [osm, `${osm}-wal`, `${osm}-shm`]) rmSync(join(dev, f), { force: true });
+  const src = new DatabaseSync(join(real, osm));
+  src.prepare('VACUUM INTO ?').run(join(dev, osm));
+  src.close();
+  console.log('Copied the downloaded roads and trails into the development copy.');
+}
 // The config folder holds the zones, so the dev copy hides the same places.
 if (existsSync(join(real, 'config')) && (again || !existsSync(join(dev, 'config')))) {
   rmSync(join(dev, 'config'), { recursive: true, force: true });

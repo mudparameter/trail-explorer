@@ -101,9 +101,11 @@ export function Help() {
       <p>Under Excluded zones in the sidebar, choose Add zone and click the map. Rides are left out inside the circle. Edit sets its size; Move places it again. Zones are drawn in red on your map only.</p>
       <h2>Find roads and trails in an area</h2>
       <p>
-        Under Roads and trails in the sidebar, choose Draw a circle. Click the centre, move the mouse out, and click again. Every road,
-        track, cycleway and trail inside is listed with its length, surface and difficulty where OpenStreetMap has them. Click a name
-        to show it, or click a line on the map. This needs the internet, and sends the circle's position to an OpenStreetMap data server.
+        Under Roads and trails in the sidebar, choose Draw a circle. Click the centre, move the mouse out, and click again. The circle
+        is kept, and its roads, tracks, cycleways and trails download in the background, so you can draw several while you wait.
+        Each one can be named, turned off, filtered by kind with ▸, or deleted with ×. Click a name in the list, or a line on the map,
+        to show it. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
+        needs the internet and sends each circle's position to an OpenStreetMap data server.
       </p>
       <h2>Hide your rides</h2>
       <p>Untick My rides under Layers. Tick it again to bring them back.</p>

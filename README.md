@@ -14,7 +14,7 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 - **Map layers.** The world map (OpenFreeMap), a world topo map (OpenTopoMap) and a Spain topo map (IGN). You can switch each one on or off, reorder them and set how see-through they are.
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.
 - **Excluded zones.** Hide places such as around home: click the map to place a circle, or draw any shape in a GeoJSON file. Rides are cut where they enter a zone.
-- **Roads and trails in an area.** Draw a circle on the map and get every road, track, cycleway and trail inside it, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). Needs the internet, and sends the circle's position to that server.
+- **Roads and trails in an area.** Draw circles on the map to get every road, track, cycleway and trail inside them, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). Circles are kept and listed in the sidebar, where each can be named, turned off, filtered by kind or deleted. Data downloads in the background and is shared: circles that overlap never download or store it twice. Needs the internet, and sends each circle's position to that server.
 - **Portable config.** Colors, start view, zoom limits, layers, offline maps and zones live in one folder of plain JSON files. Edit them in the app's Customize screen or by hand, and copy the folder to another computer.
 - **Private.** Rides stay on your computer. The Garmin key is encrypted with your system keychain and sent only to Garmin.
 
@@ -63,6 +63,7 @@ config/
   layers.json      every layer, top first: your rides, web maps, offline map files
   maps/            offline .pmtiles / .mbtiles files
   zones/           excluded zones, as .geojson files
+  areas.json       circles to find roads and trails in
 ```
 
 - **Where it is:** `~/.config/Trail Explorer/config` on Linux and `~/Library/Application Support/Trail Explorer/config` on macOS. Use **Customize → Use another folder…** to choose a different one, or set `TRAIL_CONFIG=/path/to/folder` before starting the app. For example, you can point it at a private git repository you sync between computers.
@@ -70,6 +71,16 @@ config/
 - **Mistakes:** every file and setting is optional. If a value is wrong, the app shows which file and setting, uses the default for just that setting, and keeps the rest.
 - **Comments:** any key starting with `//` is ignored, so `"//": "note to self"` works as a comment.
 - **Zones and privacy:** zones show where you live, so keep the folder private. If a zones file has a problem, the heatmap isn't redrawn until it's fixed, so nothing it should hide can show.
+
+### Road and trail data
+
+Downloaded roads and trails are kept in `osm.db` in the app's data folder, not in the config folder: it can grow large, and it can always be downloaded again. It holds one copy of each OpenStreetMap way and node, whichever circles use it:
+
+- `node`: id, longitude, latitude, and an elevation column that is empty for now
+- `way`: id, OpenStreetMap tags, and its node ids in order, so ways that meet share a node (ready to become a route graph)
+- `tile`: which map tiles (zoom 15, about 1 km) have been downloaded
+
+A circle downloads only the tiles it needs that aren't there yet, a few at a time, so a big circle survives a restart. Deleting a circle removes only the data no other circle uses.
 
 [`config.example/`](config.example) has a complete example with every file. Its [README](config.example/README.md) documents every setting.
 

@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipToCircle, distance, overpassQuery, readOverpass, roadsGeoJson } from '../src/core/roads.ts';
+import { clipToCircle, distance, overpassQuery, parseOverpass, readOverpass, roadsGeoJson, tileBounds, tileKey, tilesFor, tileXY } from '../src/core/roads.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 
 const C: [number, number] = [0, 0];
 /** A point `x` metres east and `y` metres north of the centre, on the equator. */
 const P = (x: number, y = 0): [number, number] => [x / M_PER_DEG, y / M_PER_DEG];
+let wid = 0;
 const way = (highway: string, pts: [number, number][], tags: Record<string, string> = {}) => ({
-  type: 'way', tags: { highway, ...tags }, geometry: pts.map(([lon, lat]) => ({ lon, lat })),
+  type: 'way', id: ++wid, tags: { highway, ...tags }, nodes: pts.map((_, i) => wid * 100 + i), geometry: pts.map(([lon, lat]) => ({ lon, lat })),
 });
 const near = (a: number, b: number, tol = 0.5) => assert.ok(Math.abs(a - b) <= tol, `${a} is not ${b}`);
 
@@ -69,12 +70,31 @@ test('a reply that is not Overpass JSON is refused', () => {
   assert.throws(() => readOverpass({ hello: 1 }, C, 100), /unexpected/);
 });
 
-test('the query asks for roads and trails around the centre', () => {
-  const q = overpassQuery([-0.47, 39.7], 1234.4);
-  assert.match(q, /\[out:json\]/);
-  assert.match(q, /around:1234,39\.700000,-0\.470000/);
+test('a circle touches the tiles it overlaps, and the query asks for them as boxes', () => {
+  const c: [number, number] = [-0.47, 39.7];
+  const small = tilesFor(c, 100);
+  assert.ok(small.length >= 1 && small.length <= 4);
+  const big = tilesFor(c, 5000);
+  // About 0.94 km tiles here: a 10 km wide circle covers roughly π·5.3² ≈ 90 of them.
+  assert.ok(big.length > 70 && big.length < 160, String(big.length));
+  for (const k of small) assert.ok(big.includes(k), 'a bigger circle covers the smaller one');
+  const [w, s, e, n] = tileBounds(small[0]!);
+  assert.ok(w < e && s < n && e - w < 0.02);
+  // Two tiles side by side become one box.
+  const [x, y] = tileXY(small[0]!);
+  const q = overpassQuery([tileKey(x, y), tileKey(x + 1, y), tileKey(x, y + 5)]);
+  assert.equal(q.match(/way\[/g)!.length, 2);
+  assert.match(q, /out geom;/);
   assert.match(q, /path\|footway/);
-  assert.match(q, /out tags geom/);
+});
+
+test('ways keep their node ids, and broken ones are left out', () => {
+  const ways = parseOverpass({ elements: [
+    { type: 'way', id: 1, tags: { highway: 'path' }, nodes: [10, 11], geometry: [{ lon: 0, lat: 0 }, { lon: 0.001, lat: 0 }] },
+    { type: 'way', id: 2, tags: { highway: 'path' }, nodes: [10], geometry: [{ lon: 0, lat: 0 }, { lon: 0.001, lat: 0 }] },
+    { type: 'way', id: 3, tags: { building: 'yes' }, nodes: [1, 2], geometry: [{ lon: 0, lat: 0 }, { lon: 0.001, lat: 0 }] },
+  ] });
+  assert.deepEqual(ways.map((w) => [w.id, w.nodes]), [[1, [10, 11]]]);
 });
 
 test('distances read naturally', () => {

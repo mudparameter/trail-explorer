@@ -7,10 +7,12 @@
 //   layers.json     every layer, top first
 //   maps/           offline map files named in layers.json
 //   zones/*.geojson places left out of the heatmap
+//   areas.json      circles to find roads and trails in
 //
 // Every file and every field is optional. A bad value is reported and replaced
 // by its default, so one typo never stops the app.
 import type { Bounds, View } from './api.ts';
+import { AREAS_FILE, parseAreas, type Area } from './areas.ts';
 import { DEFAULT_OVERPASS } from './roads.ts';
 import { parseZones, type Zone } from './zones.ts';
 
@@ -61,6 +63,7 @@ export interface Config {
   /** Top first. Always has exactly one heatmap layer. */
   layers: LayerDef[];
   zones: Zone[];
+  areas: Area[];
 }
 export interface Problem {
   file: string;
@@ -107,6 +110,7 @@ export const DEFAULTS: Config = {
     { id: 'openfreemap', type: 'openfreemap', name: 'World map', note: 'OpenFreeMap', on: true, opacity: 1 },
   ],
   zones: [],
+  areas: [],
 };
 
 /** Legend text for each band: "1", "2 to 3", "40 or more". */
@@ -153,12 +157,19 @@ export function parseConfig(files: Record<string, string>): { config: Config; pr
     zones.push(...r.zones);
     problems.push(...r.problems.map((message) => ({ file: path, message })));
   }
+  let areas: Area[] = [];
+  if (files[AREAS_FILE] !== undefined) {
+    const r = parseAreas(files[AREAS_FILE]);
+    areas = r.areas;
+    problems.push(...r.problems.map((message) => ({ file: AREAS_FILE, message })));
+  }
   return {
     config: {
       map: readMap(json('map.json'), problems),
       heatmap: readHeatmap(json('heatmap.json'), problems),
       layers: readLayers(json('layers.json'), problems),
       zones,
+      areas,
     },
     problems,
   };

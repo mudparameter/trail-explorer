@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Bounds, ConfigState, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
+import type { AreaView, Bounds, ConfigState, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
 import type { Config } from '../core/config.ts';
-import { distance, MIN_AREA, type RoadKind } from '../core/roads.ts';
+import type { AreaEdit } from '../core/areas.ts';
+import { distance, MIN_AREA, type Road } from '../core/roads.ts';
 import { trail } from './api.ts';
 import { Customize } from './Customize.tsx';
-import { buildStyle, type Bundled } from './mapstyle.ts';
+import { buildStyle, KEY_SEP, type Bundled, type StyleArea } from './mapstyle.ts';
 import { MapView } from './MapView.tsx';
 import { Help, KeyForm, Settings } from './Screens.tsx';
-import { RoadsPanel, type Search } from './Roads.tsx';
+import { RoadsPanel } from './Roads.tsx';
 import { Sidebar } from './Sidebar.tsx';
 
 export type Screen = 'map' | 'customize' | 'settings' | 'help';
@@ -42,10 +43,23 @@ export function App() {
   const [placing, setPlacing] = useState<Placing>(null);
   const [drawing, setDrawing] = useState(false);
   const [drawRadius, setDrawRadius] = useState<number | null>(null);
-  const [search, setSearch] = useState<Search | null>(null);
+  const [areas, setAreas] = useState<AreaView[]>([]);
+  const [roads, setRoads] = useState<Record<string, { version: number; roads: Road[] }>>({});
+  /** The area whose roads are listed over the map. */
+  const [listed, setListed] = useState<string | null>(null);
+  /** The selected road, as area id + KEY_SEP + road key. */
   const [selected, setSelected] = useState<string | null>(null);
-  const [hiddenKinds, setHiddenKinds] = useState<RoadKind[]>([]);
-  const searchId = useRef(0);
+  const asked = useRef(new Map<string, number>());
+  /** Area edits and removals still being saved. Kept over updates from the app until they are. */
+  const pending = useRef(new Map<number, { id: string; edit: AreaEdit | 'remove' }>());
+  const editNo = useRef(0);
+  const gotAreas = useCallback((list: AreaView[]) => {
+    let out = list;
+    for (const { id, edit } of pending.current.values()) {
+      out = edit === 'remove' ? out.filter((a) => a.id !== id) : out.map((a) => (a.id === id ? { ...a, ...edit } : a));
+    }
+    setAreas(out);
+  }, []);
 
   const config = (c: ConfigState) => {
     setCfg(c);
@@ -62,13 +76,29 @@ export function App() {
         setShowZones(sv.showZones);
         setStatus(st);
       });
+    void trail.getAreas().then(gotAreas);
+    const offAreas = trail.onAreas(gotAreas);
     const offStatus = trail.onStatus(setStatus);
     const offConfig = trail.onConfig(config);
     return () => {
+      offAreas();
       offStatus();
       offConfig();
     };
   }, []);
+  // Fetch the roads of each area once it is ready, and again when they change.
+  useEffect(() => {
+    for (const a of areas) {
+      if (a.state !== 'ready' || roads[a.id]?.version === a.version || asked.current.get(a.id) === a.version) continue;
+      asked.current.set(a.id, a.version);
+      void trail.getAreaRoads(a.id).then((r) => {
+        if (r.ok && r.value.version) setRoads((x) => ({ ...x, [a.id]: r.value }));
+      });
+    }
+    const ids = new Set(areas.map((a) => a.id));
+    if (Object.keys(roads).some((id) => !ids.has(id))) setRoads((x) => Object.fromEntries(Object.entries(x).filter(([id]) => ids.has(id))));
+    // An area just drawn is listed before it arrives here, so `listed` is not cleared: the panel hides itself.
+  }, [areas, roads]);
   useEffect(() => {
     if (!placing && !drawing) return;
     const esc = (e: KeyboardEvent) => {
@@ -119,16 +149,7 @@ export function App() {
     setDrawRadius(null);
     setDrawing(true);
   };
-  const findRoads = async (center: [number, number], radius: number) => {
-    const id = ++searchId.current;
-    setSelected(null);
-    setSearch({ center, radius, state: 'loading', roads: [] });
-    const r = await trail.findRoads(center, radius);
-    // A newer search, or Clear, wins.
-    if (id !== searchId.current) return;
-    setSearch(r.ok ? { center, radius, state: 'done', roads: r.value } : { center, radius, state: 'error', roads: [], error: r.error });
-  };
-  const drawn = (center: [number, number], radius: number) => {
+  const drawn = async (center: [number, number], radius: number) => {
     if (radius < MIN_AREA) {
       setDrawRadius(null);
       setNotice(`Make the circle at least ${MIN_AREA} m across from its centre. Click the centre again.`);
@@ -136,12 +157,27 @@ export function App() {
     }
     setNotice(null);
     setDrawing(false);
-    void findRoads(center, radius);
+    const r = await trail.addArea({ center, radius });
+    if (!r.ok) setNotice(r.error);
+    else {
+      setSelected(null);
+      setListed(r.value);
+    }
   };
-  const clearSearch = () => {
-    searchId.current++;
-    setSearch(null);
-    setSelected(null);
+  const report = async (r: Promise<{ ok: boolean; error?: string }>) => {
+    const x = await r;
+    if (!x.ok) setNotice(x.error ?? 'Something went wrong.');
+    return x.ok;
+  };
+  const editArea = (id: string, edit: AreaEdit | 'remove') => {
+    const n = ++editNo.current;
+    pending.current.set(n, { id, edit });
+    setAreas((as) => (edit === 'remove' ? as.filter((a) => a.id !== id) : as.map((a) => (a.id === id ? { ...a, ...edit } : a))));
+    if (edit === 'remove' && listed === id) setListed(null);
+    void report(edit === 'remove' ? trail.removeArea(id) : trail.editArea(id, edit)).finally(() => {
+      pending.current.delete(n);
+      void trail.getAreas().then(gotAreas);
+    });
   };
 
   const addMap = async (file?: File) => {
@@ -168,14 +204,22 @@ export function App() {
 
   const hv = status?.heatmapVersion ?? 0;
   const shown = useMemo(() => (cfg ? withStates(cfg.config, layers) : null), [cfg, layers]);
-  const explore = useMemo(
-    () => (search ? { center: search.center, radius: search.radius, roads: search.roads.filter((r) => !hiddenKinds.includes(r.kind)), selected } : null),
-    [search, hiddenKinds, selected],
+  const styleAreas = useMemo(
+    (): StyleArea[] => areas.filter((a) => a.on).map((a) => ({
+      id: a.id, center: a.center, radius: a.radius, ready: a.state === 'ready',
+      roads: (roads[a.id]?.roads ?? []).filter((r) => !a.hide.includes(r.kind)),
+    })),
+    [areas, roads],
   );
   const style = useMemo(
-    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones, drawing, explore }) : null),
-    [shown, cfg, bundled, hv, showZones, drawing, explore],
+    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones, drawing, areas: styleAreas, selected }) : null),
+    [shown, cfg, bundled, hv, showZones, drawing, styleAreas, selected],
   );
+  const listedArea = areas.find((a) => a.id === listed) ?? null;
+  const pick = (key: string | null) => {
+    setSelected(key);
+    if (key) setListed(key.slice(0, key.indexOf(KEY_SEP)));
+  };
   if (!status || !saved || !cfg || !shown || !style) return null;
 
   if (!status.hasKey && status.sync.total === 0 && screen === 'map') {
@@ -205,7 +249,8 @@ export function App() {
         goToRides={goToRides} addMap={() => void addMap()} notice={setNotice}
         showZones={showZones} setShowZones={toggleZones} placing={placing}
         setPlacing={(p) => { setScreen('map'); setDrawing(false); setPlacing(p); }}
-        drawing={drawing} startDrawing={startDrawing}
+        drawing={drawing} startDrawing={startDrawing} areas={areas} editArea={editArea}
+        listArea={(id) => { setScreen('map'); setSelected(null); setListed(id); }}
       />
       <div className="main">
         {status.keyProblem && screen !== 'settings' && (
@@ -239,13 +284,15 @@ export function App() {
             <MapView
               style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
               placing={placing !== null} onPlace={(at) => void place(at)}
-              drawing={drawing} onDrawn={drawn} onDrawRadius={setDrawRadius} onPickRoad={setSelected}
+              drawing={drawing} onDrawn={(c, r) => void drawn(c, r)} onDrawRadius={setDrawRadius} onPickRoad={pick}
               goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
             />
-            {search && (
+            {listedArea && (
               <RoadsPanel
-                search={search} selected={selected} select={setSelected} hidden={hiddenKinds} setHidden={setHiddenKinds}
-                go={go} retry={() => void findRoads(search.center, search.radius)} redraw={startDrawing} close={clearSearch}
+                area={listedArea} roads={roads[listedArea.id]?.roads ?? null} report={report} edit={editArea} go={go}
+                selected={selected?.startsWith(listedArea.id + KEY_SEP) ? selected.slice(listedArea.id.length + 1) : null}
+                select={(k) => setSelected(k ? listedArea.id + KEY_SEP + k : null)}
+                close={() => { setListed(null); setSelected(null); }}
               />
             )}
           </div>

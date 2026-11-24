@@ -2,12 +2,13 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { AREAS_FILE } from '../core/areas.ts';
 import { APP_ZONES, FILES, fileText, parseConfig, type Config, type Problem } from '../core/config.ts';
 import { CONFIG_README } from '../core/config-readme.ts';
 
 const MAX_FILE = 20 * 1024 ** 2;
 /** The only files the app writes. Map files go through Maps. */
-const WRITABLE = new Set<string>([...FILES, APP_ZONES]);
+const WRITABLE = new Set<string>([...FILES, APP_ZONES, AREAS_FILE]);
 
 export class ConfigDir {
   readonly dir: string;
@@ -35,7 +36,7 @@ export class ConfigDir {
     const files: Record<string, string> = {};
     const problems: Problem[] = [];
     const zones = await readdir(join(this.dir, 'zones')).catch(() => [] as string[]);
-    for (const f of [...FILES, ...zones.filter((z) => /\.(geo)?json$/i.test(z)).map((z) => `zones/${z}`)]) {
+    for (const f of [...FILES, AREAS_FILE, ...zones.filter((z) => /\.(geo)?json$/i.test(z)).map((z) => `zones/${z}`)]) {
       try {
         const s = await stat(join(this.dir, f));
         if (!s.isFile()) continue;

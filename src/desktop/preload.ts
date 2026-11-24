@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { ConfigState, Status, TrailApi } from '../core/api.ts';
+import type { AreaView, ConfigState, Status, TrailApi } from '../core/api.ts';
 
 const call = (name: string, ...args: unknown[]) => ipcRenderer.invoke(`trail:${name}`, ...args);
 
@@ -36,6 +36,16 @@ const api: TrailApi = {
   getSaved: () => call('getSaved'),
   saveView: (v) => call('saveView', v),
   saveShowZones: (on) => call('saveShowZones', on),
-  findRoads: (c, r) => call('findRoads', c, r),
+  getAreas: () => call('getAreas'),
+  onAreas: (fn) => {
+    const h = (_: unknown, a: AreaView[]) => fn(a);
+    ipcRenderer.on('trail:areas', h);
+    return () => ipcRenderer.off('trail:areas', h);
+  },
+  getAreaRoads: (id) => call('getAreaRoads', id),
+  addArea: (a) => call('addArea', a),
+  editArea: (id, e) => call('editArea', id, e),
+  removeArea: (id) => call('removeArea', id),
+  retryArea: (id) => call('retryArea', id),
 };
 contextBridge.exposeInMainWorld('trail', api);

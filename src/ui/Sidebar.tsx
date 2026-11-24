@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import type { Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
+import type { AreaView, Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
 import { APP_ZONES, bandLabels, type Config } from '../core/config.ts';
 import { MAX_RADIUS, MIN_RADIUS, type Zone } from '../core/zones.ts';
 import type { Placing, Screen } from './App.tsx';
 import { trail } from './api.ts';
+import { AreaList, type EditArea } from './Roads.tsx';
 
 interface Props {
   status: Status;
@@ -24,6 +25,9 @@ interface Props {
   setPlacing(p: Placing): void;
   drawing: boolean;
   startDrawing(): void;
+  areas: AreaView[];
+  listArea(id: string): void;
+  editArea: EditArea;
 }
 
 function ago(iso: string | null): string {
@@ -155,9 +159,10 @@ export function Sidebar(p: Props) {
 
       <Zones {...p} report={report} />
 
-      <h2>Roads and trails</h2>
-      <p className="small">Draw a circle on the map to list every road and trail in it, from OpenStreetMap.</p>
-      <button disabled={p.drawing} onClick={p.startDrawing}>{p.drawing ? 'Drawing…' : 'Draw a circle'}</button>
+      <AreaList
+        areas={p.areas} edit={p.editArea} drawing={p.drawing} startDrawing={p.startDrawing} report={report} list={p.listArea}
+        go={(b) => { p.setScreen('map'); p.go(b); }}
+      />
 
       <h2>Times ridden</h2>
       <ul className="legend">

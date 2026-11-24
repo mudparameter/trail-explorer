@@ -23,6 +23,7 @@ Keep this folder private if it has zones in it: they show where you live.
 | \`layers.json\` | Every layer, top first: your rides, web maps and map files |
 | \`maps/\` | Offline map files (.pmtiles or .mbtiles) named in layers.json |
 | \`zones/\` | Excluded zones, as GeoJSON files |
+| \`areas.json\` | Circles to find roads and trails in |
 
 ## map.json
 
@@ -108,4 +109,28 @@ files, made with any map tool such as geojson.io or QGIS.
 - A circle is a Point with a \`radius\` in metres:
   \`{ "type": "Feature", "properties": { "name": "Home", "radius": 300 }, "geometry": { "type": "Point", "coordinates": [-0.47, 39.7] } }\`
 - Any Polygon or MultiPolygon works too, holes included.
+
+## areas.json
+
+The circles drawn under Roads and trails, one per line. Draw them in the app,
+or add them by hand. The app downloads what each one needs.
+
+\`\`\`json
+{
+  "areas": [
+    { "id": "k3x9qa", "name": "Calderona", "center": [-0.47, 39.7], "radius": 1500, "on": true, "hide": ["road"] },
+    { "center": [-0.52, 39.65], "radius": 800 }
+  ]
+}
+\`\`\`
+
+- \`center\`: [longitude, latitude]. \`radius\`: metres, from 50 to 10000.
+- \`name\`: optional.
+- \`on\`: whether it shows on the map. \`hide\`: kinds of road left off the map
+  for this area: \`"trail"\`, \`"track"\`, \`"cycleway"\`, \`"road"\`.
+- \`id\`: lets the app change one area. It is made for you when left out.
+
+The road data is not in this folder. The app keeps one shared copy of it
+(\`osm.db\` in its data folder), so overlapping areas never download or store
+anything twice. Moved to another computer, the areas download again there.
 `;

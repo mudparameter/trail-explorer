@@ -2,9 +2,11 @@ import { constants, mkdirSync, watch } from 'node:fs';
 import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
-import type { Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
+import type { AreaView, Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
 import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
-import { MAX_AREA, MIN_AREA, overpassQuery, readOverpass, type Road } from '../core/roads.ts';
+import { AREAS_FILE, areasText, checkAreaEdit, newAreaId, type Area, type AreaEdit } from '../core/areas.ts';
+import { Areas } from './areas.ts';
+import { OsmStore } from './osm.ts';
 import { addCircle, editCircle, removeZone, type CircleEdit } from '../core/zones.ts';
 import { ConfigDir } from './configdir.ts';
 import { Busy, Garmin, GARMIN, KeyRejected, Offline } from './garmin.ts';
@@ -149,6 +151,73 @@ function start() {
   const maps = new Maps(join(where.dir, 'maps'));
   let config: Config = DEFAULTS;
   let problems: Problem[] = [];
+
+  // Asks the config's Overpass servers for OpenStreetMap data. Public servers are
+  // often full, so busy answers are retried, then the next server is tried.
+  const BUSY = [429, 502, 503, 504];
+  const WAITS = [0, 3000, 8000, 20000];
+  async function overpass(query: string): Promise<unknown> {
+    const servers = test.overpass?.startsWith('http://127.0.0.1:') ? [test.overpass] : config.map.overpass;
+    const body = new URLSearchParams({ data: query }).toString();
+    let why = 'busy';
+    for (const server of servers) {
+      for (const ms of WAITS) {
+        if (ms) await new Promise((r) => setTimeout(r, test.overpass ? ms / 20 : ms));
+        let res: Response;
+        try {
+          res = await net.fetch(server, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            body,
+            signal: AbortSignal.timeout(180_000),
+          });
+        } catch (e) {
+          if (!net.isOnline()) throw new Error('No internet. Downloading roads and trails needs it. Try again when you are online.');
+          why = (e as Error).name === 'TimeoutError' ? 'slow' : 'unreachable';
+          break; // try the next server
+        }
+        if (BUSY.includes(res.status)) {
+          why = 'busy';
+          await res.body?.cancel();
+          continue;
+        }
+        if (!res.ok) {
+          why = `error ${res.status}`;
+          break;
+        }
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          why = 'garbled';
+          break;
+        }
+        // Overpass reports running out of time or memory here, with a 200.
+        if (typeof json?.remark === 'string' && /error/i.test(json.remark)) {
+          why = 'unfinished';
+          break;
+        }
+        return json;
+      }
+    }
+    const host = servers.length === 1 ? new URL(servers[0]!).host : 'Every map data server';
+    throw new Error(
+      why === 'busy' ? `${host} is busy. Try again in a minute, or add another server in Customize.`
+        : why === 'slow' ? `${host} took too long. Try again later.`
+        : why === 'unfinished' ? `${host} could not finish. Try again later.`
+        : why === 'unreachable' ? `Could not reach ${host}.`
+        : `${host} sent something unexpected (${why}).`,
+    );
+  }
+  const osm = new OsmStore(join(data, 'osm.db'));
+  let areasTimer: NodeJS.Timeout | null = null;
+  const areas = new Areas(osm, overpass, () => {
+    areasTimer ??= setTimeout(() => {
+      areasTimer = null;
+      if (win && !win.isDestroyed()) win.webContents.send('trail:areas', areas.view());
+    }, 100);
+  });
   let mapInfos: Record<string, MapInfo> = {};
   let stopWatching = () => {};
   let configLoaded = false;
@@ -195,6 +264,7 @@ function start() {
     problems = found;
     mapInfos = infos;
     configLoaded = true;
+    areas.set(config.areas);
     if (heatKey() !== store.get<string>('heatmapKey')) void buildHeatmap();
     // New web maps need a new security policy, which needs a fresh page.
     if (win && !win.isDestroyed() && mapOrigins(config.layers).join(' ') !== before) win.webContents.reload();
@@ -482,73 +552,62 @@ function start() {
     if (typeof on === 'boolean') store.set('showZones', on);
   });
 
-  // Asks the config's Overpass servers for OpenStreetMap roads and trails. Public
-  // servers are often full, so busy answers are retried, then the next server is
-  // tried. One search at a time: a new one stops the last.
-  let roadSearch: AbortController | null = null;
-  const BUSY = [429, 502, 503, 504];
-  const WAITS = [0, 3000, 8000];
-  handle('findRoads', (center: unknown, radius: unknown) => result(async (): Promise<Road[]> => {
-    const c = center as [number, number];
-    if (!Array.isArray(c) || c.length !== 2 || !c.every(Number.isFinite) || Math.abs(c[0]) > 180 || Math.abs(c[1]) > 85) throw new Error('Pick a place on the map.');
-    if (typeof radius !== 'number' || !(radius >= MIN_AREA && radius <= MAX_AREA)) throw new Error(`The circle's radius should be ${MIN_AREA} m to ${MAX_AREA / 1000} km.`);
-    roadSearch?.abort();
-    const ctl = (roadSearch = new AbortController());
-    const stopped = () => new Error('Replaced by a newer search.');
-    const wait = (ms: number) => new Promise<void>((ok, no) => {
-      const t = setTimeout(ok, ms);
-      ctl.signal.addEventListener('abort', () => { clearTimeout(t); no(stopped()); }, { once: true });
+  // --- roads and trails ----------------------------------------------------------
+  // Areas are listed in areas.json. Their road data is shared in osm.db, so it is
+  // downloaded once, whichever areas use it.
+  handle('getAreas', (): AreaView[] => areas.view());
+  handle('getAreaRoads', (id: unknown) => result(() => {
+    const c = typeof id === 'string' ? areas.roadsOf(id) : null;
+    return c ? { version: c.version, roads: c.roads } : { version: 0, roads: [] };
+  }));
+  // One change to areas.json at a time, each from the file as it is now.
+  let areaWrites: Promise<unknown> = Promise.resolve();
+  const editAreas = (fn: (list: Area[]) => Area[]) => {
+    const next = areaWrites.then(async () => {
+      await loading;
+      if (problems.some((p) => p.file === AREAS_FILE)) throw new Error(`${AREAS_FILE} has a problem, so the app will not change it. Fix it in the Customize screen's list first.`);
+      const list = fn(config.areas);
+      await cfgDir.write(AREAS_FILE, areasText(list, await cfgDir.read(AREAS_FILE)));
+      await reload();
     });
-    const servers = test.overpass?.startsWith('http://127.0.0.1:') ? [test.overpass] : config.map.overpass;
-    const body = new URLSearchParams({ data: overpassQuery(c, radius) }).toString();
-    let why = 'busy';
-    for (const server of servers) {
-      for (const ms of WAITS) {
-        if (ms) await wait(ms);
-        let res: Response;
-        try {
-          res = await net.fetch(server, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-            body,
-            signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(100_000)]),
-          });
-        } catch (e) {
-          if (ctl.signal.aborted) throw stopped();
-          why = (e as Error).name === 'TimeoutError' ? 'slow' : net.isOnline() ? 'unreachable' : 'offline';
-          if (why === 'offline') throw new Error('No internet. Finding roads and trails needs it.');
-          break; // try the next server
-        }
-        if (BUSY.includes(res.status)) {
-          why = 'busy';
-          await res.body?.cancel();
-          continue;
-        }
-        if (!res.ok) {
-          why = `error ${res.status}`;
-          break;
-        }
-        const text = await res.text();
-        if (text.length > 200 * 1024 ** 2) throw new Error('Too much data. Try a smaller circle.');
-        let json: any;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          why = 'garbled';
-          break;
-        }
-        // Overpass reports running out of time or memory here, with a 200.
-        if (typeof json?.remark === 'string' && /error/i.test(json.remark)) throw new Error('The map data server could not finish. Try a smaller circle.');
-        return readOverpass(json, c, radius);
-      }
-    }
-    const host = servers.length === 1 ? new URL(servers[0]!).host : 'every map data server';
-    throw new Error(
-      why === 'busy' ? `${host} is busy. Try again in a minute, or add another server to "overpass" in map.json.`
-        : why === 'slow' ? `${host} took too long. Try a smaller circle, or again later.`
-        : why === 'unreachable' ? `Could not reach ${host}.`
-        : `${host} sent something unexpected (${why}).`,
-    );
+    areaWrites = next.catch(() => {});
+    return next;
+  };
+  handle('addArea', (a: { center?: unknown; radius?: unknown; name?: unknown }) => result(async () => {
+    const edit = { center: a?.center, radius: a?.radius, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null } as AreaEdit;
+    if (edit.center === undefined || edit.radius === undefined) throw new Error('An area needs a place and a size.');
+    checkAreaEdit(edit);
+    let id = '';
+    await editAreas((list) => {
+      id = newAreaId(list);
+      return [...list, { id, name: edit.name ?? null, center: edit.center!, radius: Math.round(edit.radius!), on: true, hide: [] }];
+    });
+    return id;
+  }));
+  handle('editArea', (id: unknown, e: unknown) => result(async () => {
+    const edit = (e ?? {}) as AreaEdit;
+    checkAreaEdit(edit);
+    const clean: AreaEdit = {};
+    if (edit.name !== undefined) clean.name = edit.name?.trim() || null;
+    if (edit.on !== undefined) clean.on = edit.on;
+    if (edit.hide !== undefined) clean.hide = [...new Set(edit.hide)];
+    if (edit.center !== undefined) clean.center = edit.center;
+    if (edit.radius !== undefined) clean.radius = Math.round(edit.radius);
+    await editAreas((list) => {
+      if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
+      return list.map((a) => (a.id === id ? { ...a, ...clean } : a));
+    });
+  }));
+  handle('removeArea', (id: unknown) => result(async () => {
+    await editAreas((list) => {
+      if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
+      return list.filter((a) => a.id !== id);
+    });
+    const n = areas.prune();
+    if (n) console.log(`Dropped ${n} roads no area uses.`);
+  }));
+  handle('retryArea', (id: unknown) => result(() => {
+    if (typeof id === 'string') areas.retry(id);
   }));
 
   // --- trail:// ---------------------------------------------------------------
@@ -656,6 +715,9 @@ function start() {
     stopWatching();
     void Promise.race([sync.stop(), new Promise((r) => setTimeout(r, 2000))]).then(async () => {
       if (timer) clearTimeout(timer);
+      if (areasTimer) clearTimeout(areasTimer);
+      areas.stop();
+      osm.close();
       await maps.close();
       worker?.kill();
       store.close();

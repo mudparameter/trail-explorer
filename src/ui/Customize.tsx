@@ -26,6 +26,11 @@ export function Customize({ cfg, view, showOnMap }: Props) {
       <MapSection key={JSON.stringify(config.map)} value={config.map} view={view} showOnMap={showOnMap} />
       <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />
       <LayersSection key={JSON.stringify(config.layers)} value={config.layers} cfg={cfg} />
+      <h2>Roads and trails</h2>
+      <p>
+        Circles drawn under Roads and trails are kept in <code>areas.json</code>, one per line. Add or change them there by hand if you
+        like. The road data they download is kept by the app, shared between overlapping circles, and not in this folder.
+      </p>
       <h2>Excluded zones</h2>
       <p>
         Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
