@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Status } from '../core/api.ts';
+import type { ImportStatus, Status } from '../core/api.ts';
 import { trail } from './api.ts';
 
 const inAYear = () => {
@@ -75,6 +75,7 @@ export function Settings({ status }: { status: Status }) {
         </>
       )}
       {form && <KeyForm onSaved={() => setReplace(false)} />}
+      <ImportRides status={status.import} />
       <h2>Ride data</h2>
       <p>{status.sync.onMap} rides are stored on this computer.</p>
       <Confirm label="Delete all rides" question="Delete every ride from this computer? Garmin may only return about the last three years." action={() => trail.deleteRides()} />
@@ -115,9 +116,35 @@ export function Help() {
       <h2>What the colors mean</h2>
       <p>The color shows how many times you have ridden each section. Every pass counts: five laps count as five, and an out-and-back counts as two. Trails closer together than about 15 meters may be joined.</p>
       <h2>Which rides are included</h2>
-      <p>Cycling activities with GPS. Virtual and indoor rides are left out. Garmin appears to return about the last three years. Rides already in the app stay.</p>
+      <p>Cycling activities with GPS. Virtual and indoor rides are left out. Garmin appears to return about the last three years. Rides already in the app stay. For older rides, use Import rides in Settings with Garmin's Export your data .zip.</p>
       <h2>Map credits</h2>
       <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps and road and trail searches © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
     </main>
+  );
+}
+
+/** Adds rides from an export .zip, such as Garmin's "Export your data" or Strava's. */
+function ImportRides({ status: s }: { status: ImportStatus | null }) {
+  const [error, setError] = useState<string | null>(null);
+  const reading = s?.state === 'reading';
+  return (
+    <>
+      <h2>Import rides</h2>
+      <p>
+        Add rides from a .zip of ride files, such as the export Garmin Connect or Strava emails you. Rides already here, from Garmin
+        or an earlier import, are left out. The .zip is only read: just the new rides are kept.
+      </p>
+      <button disabled={reading} onClick={async () => {
+        setError(null);
+        const r = await trail.importRides();
+        if (!r.ok) setError(r.error);
+      }}>{reading ? 'Importing…' : 'Import rides from a .zip'}</button>
+      {error && <p className="small error" role="alert">{error}</p>}
+      {s && (
+        <p className={`small${s.state === 'error' ? ' error' : ''}`} role="status">
+          {reading ? `Reading ${s.file}: ${s.found} ride file${s.found === 1 ? '' : 's'}, ${s.added} new so far…` : s.message}
+        </p>
+      )}
+    </>
   );
 }

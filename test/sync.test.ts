@@ -47,7 +47,7 @@ test('virtual, indoor, broken and non-fit files', () => setup({ rides: [
 ] }, async ({ f, store, make }) => {
   const s = make(); await s.go();
   assert.equal(s.state, 'idle');
-  assert.deepEqual(store.counts(), { waiting: 0, done: 1, 'no-gps': 1, failed: 1, unread: 1, total: 4 });
+  assert.deepEqual(store.counts(), { waiting: 0, done: 1, 'no-gps': 1, failed: 1, unread: 1, same: 0, total: 4 });
   assert.ok(!f.downloads.includes('2'));
 }));
 test('rejected key', () => setup({ rides: rides(1), rejectKey: true }, async ({ make }) => {

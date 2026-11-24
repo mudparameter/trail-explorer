@@ -24,6 +24,7 @@ const api: TrailApi = {
   saveConfig: (f, v) => call('saveConfig', f, v),
   saveLayers: (l) => call('saveLayers', l),
   pickMap: () => call('pickMap'),
+  importRides: () => call('importRides'),
   addDroppedMap: (f) => call('addMapPath', webUtils.getPathForFile(f)),
   renameMap: (id, n) => call('renameMap', id, n),
   removeMap: (id) => call('removeMap', id),

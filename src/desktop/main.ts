@@ -2,7 +2,7 @@ import { constants, mkdirSync, watch } from 'node:fs';
 import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
-import type { AreaView, Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
+import type { AreaView, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
 import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, newMapIndex, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
 import { AREAS_FILE, areasText, checkAreaEdit, newAreaId, type Area, type AreaEdit } from '../core/areas.ts';
 import { Areas } from './areas.ts';
@@ -13,6 +13,7 @@ import { Busy, Garmin, GARMIN, KeyRejected, Offline } from './garmin.ts';
 import { KeyFile } from './key.ts';
 import { Maps, slug } from './maps.ts';
 import { Store } from './store.ts';
+import { Importer } from './importer.ts';
 import { Sync } from './sync.ts';
 
 const root = app.getAppPath();
@@ -375,6 +376,12 @@ function start() {
     ridesChanged: () => void buildHeatmap(),
     changed: () => changed(),
   });
+  const importer = new Importer({
+    store, ridesDir,
+    readFile: (name, data) => runJob('readFile', { name, data }),
+    ridesChanged: () => void buildHeatmap(),
+    changed: () => changed(),
+  });
   function status(): Status {
     const c = store.counts();
     return {
@@ -385,6 +392,7 @@ function start() {
         state: sync.state, message: sync.message, done: c.total - c.waiting, total: c.total, onMap: c.done,
         noGps: c['no-gps'], failed: c.failed + c.unread, lastSync: store.get<string>('lastSync'), buildingHeatmap: building,
       },
+      import: importer.status,
       heatmapVersion: version,
       version: app.getVersion(),
     };
@@ -452,7 +460,17 @@ function start() {
     if (!hasKey) throw new Error('Add your Garmin key first.');
     sync.start();
   }));
+  handle('importRides', async (): Promise<Result<ImportStatus | null>> => {
+    if (importer.status?.state === 'reading') return { ok: false, error: 'An import is already running.' };
+    const r = await dialog.showOpenDialog(win!, {
+      title: 'Import rides', buttonLabel: 'Import', properties: ['openFile'],
+      filters: [{ name: 'Ride export', extensions: ['zip'] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: true, value: null };
+    return result(() => importer.run(r.filePaths[0]!));
+  });
   handle('deleteRides', () => result(async () => {
+    if (importer.status?.state === 'reading') throw new Error('Wait for the import to finish first.');
     await sync.stop();
     store.deleteRides();
     await rm(ridesDir, { recursive: true, force: true });
@@ -726,6 +744,7 @@ function start() {
       if (timer) clearTimeout(timer);
       if (areasTimer) clearTimeout(areasTimer);
       areas.stop();
+      importer.stop();
       osm.close();
       await maps.close();
       worker?.kill();

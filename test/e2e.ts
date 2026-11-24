@@ -1,7 +1,8 @@
 // Drives the real app against a fake Garmin. Run: BBBIKE=folder SHOTS=folder node test/e2e.ts
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { zipSync } from 'fflate';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron } from 'playwright-core';
@@ -97,6 +98,21 @@ await shot('3-heatmap');
 const seen = await w.evaluate(() => [...new Set((window as any).__map.queryRenderedFeatures({ layers: ['heat'] }).map((x: any) => x.properties.n))].sort((a: any, b: any) => a - b));
 console.log('counts on map', seen);
 assert.ok(seen.includes(1) && seen.some((n: any) => n >= 70));
+
+// Import an export .zip: a ride already synced is left out, a new one added, and the .zip is not kept.
+const exportZip = join(mkdtempSync(join(tmpdir(), 'te-export-')), 'export.zip');
+writeFileSync(exportZip, zipSync({
+  'DI_CONNECT/UploadedFiles_0-_Part1.zip': zipSync({ 'me_1.fit': fit(path(climb, 300), '2025-01-01T10:00:40Z'), 'me_2.fit': fit(path(climb, 300), '2025-03-01T09:00:00Z') }),
+  'photo.jpg': new Uint8Array(2000),
+}));
+await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [p] })) as any; }, exportZip);
+await w.getByRole('button', { name: 'Settings', exact: true }).click();
+await w.getByRole('button', { name: 'Import rides from a .zip' }).click();
+await w.getByText('1 new ride added, 1 ride already here.').waitFor();
+await w.getByText('75 rides on the map').waitFor();
+await shot('3b-imported');
+await w.getByRole('button', { name: 'Map', exact: true }).click();
+assert.ok(!readdirSync(join(data, 'rides')).some((x) => x.includes('export')), 'the export is not copied');
 
 // A5: other layers
 for (const n of ['World topo', 'Spain topo']) {
@@ -321,7 +337,7 @@ const n = f.downloads.length;
 await app.close();
 const t0 = Date.now();
 app = await launch(); w = await app.firstWindow(); watch();
-await w.getByText('74 rides on the map').waitFor();
+await w.getByText('75 rides on the map').waitFor();
 await w.waitForFunction(() => (window as any).__map?.getLayer('heat'));
 console.log('reopened in', Date.now() - t0, 'ms');
 assert.ok(Math.abs(await w.evaluate(() => (window as any).__map.getZoom()) - 1.5) < 0.01);

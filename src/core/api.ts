@@ -17,12 +17,30 @@ export interface SyncStatus {
   lastSync: string | null;
   buildingHeatmap: boolean;
 }
+/** Reading rides from an export .zip. */
+export interface ImportStatus {
+  state: 'reading' | 'done' | 'error';
+  /** The .zip's file name. */
+  file: string;
+  /** Ride files found so far. */
+  found: number;
+  added: number;
+  /** Already here, from Garmin or an earlier import. */
+  had: number;
+  noGps: number;
+  unread: number;
+  /** Indoor and virtual rides. */
+  skipped: number;
+  message: string;
+}
 export interface Status {
   hasKey: boolean;
   /** A key was saved, but it can no longer be read or Garmin refused it. */
   keyProblem: string | null;
   keyExpires: string | null;
   sync: SyncStatus;
+  /** The last import since the app started, if any. */
+  import: ImportStatus | null;
   heatmapVersion: number;
   version: string;
 }
@@ -88,6 +106,8 @@ export interface TrailApi {
   setKeyExpires(expires: string | null): Promise<Result>;
   removeKey(): Promise<Result>;
   syncNow(): Promise<Result>;
+  /** Asks for an export .zip and adds the rides in it. Null if none was chosen. */
+  importRides(): Promise<Result<ImportStatus | null>>;
   deleteRides(): Promise<Result>;
   getConfig(): Promise<ConfigState>;
   onConfig(fn: (c: ConfigState) => void): () => void;
