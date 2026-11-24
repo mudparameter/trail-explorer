@@ -142,7 +142,7 @@ function ImportRides({ status: s }: { status: ImportStatus | null }) {
       {error && <p className="small error" role="alert">{error}</p>}
       {s && (
         <p className={`small${s.state === 'error' ? ' error' : ''}`} role="status">
-          {reading ? `Reading ${s.file}: ${s.found} ride file${s.found === 1 ? '' : 's'}, ${s.added} new so far…` : s.message}
+          {reading ? `Reading ${s.file}: ${s.found} file${s.found === 1 ? '' : 's'} checked, ${s.added} new ride${s.added === 1 ? '' : 's'} so far…` : s.message}
         </p>
       )}
     </>

@@ -31,6 +31,8 @@ export interface ImportStatus {
   unread: number;
   /** Indoor and virtual rides. */
   skipped: number;
+  /** Files that are not activities, such as daily health data. */
+  other: number;
   message: string;
 }
 export interface Status {

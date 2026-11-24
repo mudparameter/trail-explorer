@@ -1,16 +1,11 @@
-// Reads rides out of an export .zip, such as Garmin's "Export your data" or
+// Reads ride files from an export, such as Garmin's "Export your data" or
 // Strava's bulk export. No Electron or DOM code here.
-//
-// Exports can be gigabytes, and Garmin's hold more zips inside, so the .zip is
-// read as a stream and only one ride file is in memory at a time.
-import { gunzipSync, Unzip, UnzipInflate, type UnzipFile } from 'fflate';
+import { gunzipSync } from 'fflate';
 import { readFit, type RideFile } from './fit.ts';
 import type { Point } from './track.ts';
 
 /** Ride files bigger than this are not rides. */
 const MAX_FILE = 100 * 1024 * 1024;
-/** How deep zips inside zips are opened. */
-const MAX_DEPTH = 3;
 const RIDE = /\.(fit|gpx|tcx)(\.gz)?$/i;
 
 export const isRideFile = (name: string) => RIDE.test(name);
@@ -19,83 +14,6 @@ export const isRideFile = (name: string) => RIDE.test(name);
 export interface Found {
   name: string;
   data: Uint8Array;
-}
-
-/**
- * Every ride file in a .zip, given as chunks of the .zip. Zips inside it are
- * opened too. `skipped` counts other files, such as photos.
- */
-export async function* rideFiles(chunks: AsyncIterable<Uint8Array>, counts = { skipped: 0 }): AsyncGenerator<Found> {
-  const ready: Found[] = [];
-  let failure: Error | null = null;
-
-  const open = (depth: number, prefix: string): Unzip => {
-    const uz = new Unzip((f: UnzipFile) => {
-      const name = prefix + f.name;
-      if (f.name.endsWith('/')) return;
-      const nested = /\.zip$/i.test(f.name) && depth < MAX_DEPTH;
-      if (!nested && !isRideFile(f.name)) {
-        counts.skipped++;
-        return;
-      }
-      if (f.originalSize !== undefined && !nested && f.originalSize > MAX_FILE) {
-        counts.skipped++;
-        return;
-      }
-      const inner = nested ? open(depth + 1, `${name}/`) : null;
-      const parts: Uint8Array[] = [];
-      let size = 0;
-      f.ondata = (err, chunk, final) => {
-        if (failure) return;
-        if (err) {
-          failure = new Error(`${name} could not be unzipped: ${err.message}`);
-          return;
-        }
-        if (inner) {
-          inner.push(chunk, final);
-          return;
-        }
-        size += chunk.length;
-        if (size > MAX_FILE) {
-          failure = new Error(`${name} is too big to be a ride.`);
-          return;
-        }
-        parts.push(chunk);
-        if (final) ready.push({ name, data: join(parts, size) });
-      };
-      try {
-        f.start();
-      } catch {
-        counts.skipped++; // a compression method we can't read
-      }
-    });
-    uz.register(UnzipInflate);
-    return uz;
-  };
-
-  const top = open(0, '');
-  let any = false;
-  for await (const chunk of chunks) {
-    any = true;
-    top.push(chunk);
-    if (failure) throw failure;
-    while (ready.length) yield ready.shift()!;
-  }
-  if (!any) throw new Error('The file is empty.');
-  top.push(new Uint8Array(0), true);
-  if (failure) throw failure;
-  while (ready.length) yield ready.shift()!;
-}
-
-function join(parts: Uint8Array[], size: number): Uint8Array {
-  if (parts.length === 1) return parts[0]!;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
 }
 
 /** Reads a .fit, .gpx or .tcx file, gzipped or not. */

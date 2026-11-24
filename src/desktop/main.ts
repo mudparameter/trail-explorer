@@ -377,7 +377,7 @@ function start() {
     changed: () => changed(),
   });
   const importer = new Importer({
-    store, ridesDir,
+    store, ridesDir, tmpDir: join(data, 'import-tmp'),
     readFile: (name, data) => runJob('readFile', { name, data }),
     ridesChanged: () => void buildHeatmap(),
     changed: () => changed(),

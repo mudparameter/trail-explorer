@@ -2,18 +2,20 @@
 // each new ride is saved on its own, like a ride from Garmin, and rides the app
 // already has, from Garmin or an earlier import, are left out.
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { zipSync } from 'fflate';
 import type { ImportStatus } from '../core/api.ts';
-import { rideFiles, startMs } from '../core/import.ts';
+import { startMs } from '../core/import.ts';
 import type { ReadFile } from '../core/ride.ts';
 import { IMPORTED, type Store } from './store.ts';
+import { rideFilesIn } from './zipread.ts';
 
 export interface ImportDeps {
   store: Store;
   ridesDir: string;
+  /** Holds zips inside the export while they are read. */
+  tmpDir: string;
   /** Reads one ride file. Runs in the worker. */
   readFile(name: string, data: Uint8Array): Promise<ReadFile>;
   ridesChanged(): void;
@@ -42,14 +44,15 @@ export class Importer {
     if (this.running) throw new Error('An import is already running.');
     this.running = true;
     this.stopped = false;
-    const s: ImportStatus = { state: 'reading', file: basename(path), found: 0, added: 0, had: 0, noGps: 0, unread: 0, skipped: 0, message: '' };
+    const s: ImportStatus = { state: 'reading', file: basename(path), found: 0, added: 0, had: 0, noGps: 0, unread: 0, skipped: 0, other: 0, message: '' };
     this.status = s;
     this.d.changed();
     const { store } = this.d;
     let fresh = 0;
     try {
       await mkdir(this.d.ridesDir, { recursive: true });
-      for await (const f of rideFiles(createReadStream(path, { highWaterMark: 1 << 20 }))) {
+      await mkdir(this.d.tmpDir, { recursive: true });
+      for await (const f of rideFilesIn(path, this.d.tmpDir)) {
         if (this.stopped) return s;
         s.found++;
         const id = IMPORTED + createHash('sha256').update(f.data).digest('hex').slice(0, 20);
@@ -66,7 +69,7 @@ export class Importer {
         if (this.stopped) return s;
         const ms = startMs(r.startedAt);
         if (r.indoor) s.skipped++;
-        else if (ms === null) s.unread++;
+        else if (ms === null) s.other++;
         else if (store.near(ms)) s.had++;
         else {
           // Only rides with GPS are kept as files; the rest are noted so they are not imported again.
@@ -106,11 +109,13 @@ export class Importer {
 
 function summary(s: ImportStatus): string {
   if (!s.found) return 'No ride files (.fit, .gpx or .tcx) were found in that file.';
+  if (s.found === s.other) return 'None of the files in that .zip are activities.';
   const n = (x: number, one: string, many = `${one}s`) => `${x} ${x === 1 ? one : many}`;
   const parts = [`${n(s.added, 'new ride')} added`];
   if (s.had) parts.push(`${n(s.had, 'ride')} already here`);
   if (s.noGps) parts.push(`${s.noGps} without GPS`);
   if (s.skipped) parts.push(`${s.skipped} indoor or virtual left out`);
   if (s.unread) parts.push(`${s.unread} could not be read`);
+  if (s.other) parts.push(`${n(s.other, 'other file')} (such as daily health data) left out`);
   return `${parts.join(', ')}.`;
 }
