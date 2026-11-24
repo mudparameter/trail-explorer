@@ -42,6 +42,8 @@ export interface LayerState {
   id: string;
   on: boolean;
   opacity: number;
+  /** Ride line width, for the heatmap layer. */
+  width?: number;
 }
 export interface View {
   center: [number, number];
@@ -91,7 +93,7 @@ export interface TrailApi {
   onConfig(fn: (c: ConfigState) => void): () => void;
   /** Checks and writes one config file. Refused, with the reasons, when anything in it is wrong. */
   saveConfig(file: ConfigFile, value: unknown): Promise<Result>;
-  /** Saves the order, visibility and opacity of the layers, top first. */
+  /** Saves the order, visibility, opacity and ride line width of the layers, top first. */
   saveLayers(layers: LayerState[]): Promise<Result>;
   /** Opens a file picker and adds the map to the config folder. Null when cancelled. */
   pickMap(): Promise<Result<MapInfo | null>>;

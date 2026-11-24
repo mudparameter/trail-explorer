@@ -204,6 +204,15 @@ await w.getByRole('checkbox', { name: 'My rides' }).uncheck();
 await w.waitForFunction(() => !(window as any).__map.getLayer('heat'));
 await w.getByRole('checkbox', { name: 'My rides' }).check();
 await w.waitForFunction(() => !!(window as any).__map.getLayer('heat'));
+// Their line width can be changed, and is saved.
+const heatWidth = () => w.evaluate(() => JSON.stringify((window as any).__map.getPaintProperty('heat', 'line-width')));
+const normal = await heatWidth();
+await w.getByLabel('My rides line width').fill('2');
+await waitFor(() => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).layers.find((l: any) => l.id === 'heatmap')?.width === 2, 'ride width saved');
+await w.waitForFunction((n) => JSON.stringify((window as any).__map.getPaintProperty('heat', 'line-width')) !== n, normal);
+await w.getByLabel('My rides line width').dblclick();
+await waitFor(() => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).layers.find((l: any) => l.id === 'heatmap')?.width === undefined, 'ride width reset');
+assert.equal(await heatWidth(), normal);
 
 // Roads and trails: circles are saved in areas.json, their data is downloaded once
 // and shared, and each can be named, hidden, filtered and deleted.

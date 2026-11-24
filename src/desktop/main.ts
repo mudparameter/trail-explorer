@@ -3,7 +3,7 @@ import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promise
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
 import type { AreaView, Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
-import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
+import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
 import { AREAS_FILE, areasText, checkAreaEdit, newAreaId, type Area, type AreaEdit } from '../core/areas.ts';
 import { Areas } from './areas.ts';
 import { OsmStore } from './osm.ts';
@@ -474,7 +474,11 @@ function start() {
     const layers = config.layers
       .map((l) => {
         const st = state.get(l.id);
-        return st ? { ...l, on: st.on, opacity: Math.max(0.05, Math.min(1, Math.round(st.opacity * 100) / 100)) } : l;
+        if (!st) return l;
+        const next = { ...l, on: st.on, opacity: Math.max(0.05, Math.min(1, Math.round(st.opacity * 100) / 100)) };
+        if (next.type !== 'heatmap' || st.width === undefined || !Number.isFinite(st.width)) return next;
+        const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(st.width * 100) / 100));
+        return width === 1 ? { ...next, width: undefined } : { ...next, width };
       })
       .map((l, i) => ({ l, i }))
       .sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i)

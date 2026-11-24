@@ -19,6 +19,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .layers li { border-bottom: 1px solid #ddd; padding: 5px 0; overflow-wrap: anywhere; }
 .layers input[type='range'] { width: 100%; margin: 2px 0; }
 .layers { margin-bottom: 8px; }
+.layers label.slider { display: block; margin-top: 2px; }
 .order { white-space: nowrap; }
 .order button { padding: 0 5px; }
 progress { width: 100%; }

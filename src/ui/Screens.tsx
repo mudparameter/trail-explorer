@@ -109,7 +109,7 @@ export function Help() {
         needs the internet and sends each circle's position to an OpenStreetMap data server.
       </p>
       <h2>Hide your rides</h2>
-      <p>Untick My rides under Layers. Tick it again to bring them back.</p>
+      <p>Untick My rides under Layers. Tick it again to bring them back. Its Line width slider makes ride lines thinner or thicker; double-click it to reset.</p>
       <h2>Change colors, maps and where the map opens</h2>
       <p>Open Customize. Everything there is saved as plain files in the config folder, which you can also edit by hand or copy to another computer.</p>
       <h2>What the colors mean</h2>

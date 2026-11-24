@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AreaView, Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
-import { APP_ZONES, bandLabels, type Config } from '../core/config.ts';
+import { APP_ZONES, bandLabels, layerState, MAX_WIDTH, MIN_WIDTH, type Config } from '../core/config.ts';
 import { MAX_RADIUS, MIN_RADIUS, type Zone } from '../core/zones.ts';
 import type { Placing, Screen } from './App.tsx';
 import { trail } from './api.ts';
@@ -58,7 +58,7 @@ export function Sidebar(p: Props) {
   const [edit, setEdit] = useState<{ id: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const s = status.sync;
-  const states: LayerState[] = config.layers.map((l) => ({ id: l.id, on: l.on, opacity: l.opacity }));
+  const states: LayerState[] = config.layers.map(layerState);
   const set = (id: string, v: Partial<LayerState>) => p.change(states.map((l) => (l.id === id ? { ...l, ...v } : l)));
   const move = (i: number, d: number) => {
     const ls = [...states];
@@ -124,6 +124,13 @@ export function Sidebar(p: Props) {
               {l.on && (
                 <input type="range" min={0.1} max={1} step={0.05} value={l.opacity} aria-label={`${l.name} opacity`} title="Opacity"
                   onChange={(e) => set(l.id, { opacity: Number(e.target.value) })} />
+              )}
+              {l.on && l.type === 'heatmap' && (
+                <label className="small slider">
+                  Line width
+                  <input type="range" min={MIN_WIDTH} max={MAX_WIDTH} step={0.05} value={l.width ?? 1} aria-label={`${l.name} line width`} title="Line width"
+                    onChange={(e) => set(l.id, { width: Number(e.target.value) })} onDoubleClick={() => set(l.id, { width: 1 })} />
+                </label>
               )}
               {l.type === 'file' && edit?.id === l.id && (
                 <form className="row" onSubmit={async (e) => {

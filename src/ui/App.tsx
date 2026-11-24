@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AreaView, Bounds, ConfigState, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
-import type { Config } from '../core/config.ts';
+import { layerState, type Config, type LayerDef } from '../core/config.ts';
 import type { AreaEdit } from '../core/areas.ts';
 import { distance, MIN_AREA, type Road } from '../core/roads.ts';
 import { trail } from './api.ts';
@@ -23,7 +23,7 @@ function withStates(config: Config, states: LayerState[]): Config {
   const layers = config.layers
     .map((l) => ({ l, at: byId.get(l.id) }))
     .sort((a, b) => (a.at?.i ?? 1e9) - (b.at?.i ?? 1e9))
-    .map(({ l, at }) => (at ? { ...l, on: at.s.on, opacity: at.s.opacity } : l));
+    .map(({ l, at }) => (at ? ({ ...l, on: at.s.on, opacity: at.s.opacity, ...(l.type === 'heatmap' ? { width: at.s.width } : {}) } as LayerDef) : l));
   return { ...config, layers };
 }
 
@@ -63,7 +63,7 @@ export function App() {
 
   const config = (c: ConfigState) => {
     setCfg(c);
-    setLayers(c.config.layers.map((l) => ({ id: l.id, on: l.on, opacity: l.opacity })));
+    setLayers(c.config.layers.map(layerState));
   };
   useEffect(() => {
     const json = (u: string) => fetch(u).then((r) => r.json());

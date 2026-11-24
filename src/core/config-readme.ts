@@ -90,7 +90,8 @@ The first layer is drawn on top. Every layer has an \`id\` (lower-case letters,
 digits, - and _), a \`name\`, and optionally a \`note\`, \`on\` and \`opacity\`
 (0.05 to 1). The types are:
 
-- \`heatmap\`: your rides. There is always exactly one.
+- \`heatmap\`: your rides. There is always exactly one. Optional \`width\` (0.25 to
+  3, normally 1) makes the ride lines thinner or thicker.
 - \`openfreemap\`: the OpenFreeMap world map, with the bundled style.
 - \`raster\`: picture tiles from the web. \`tiles\` lists one or more https
   addresses with {z}, {x} and {y} in them; list each server separately rather

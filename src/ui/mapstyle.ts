@@ -82,7 +82,12 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     const map = def.type === 'file' ? maps[def.id] : undefined;
     if (def.type === 'heatmap') {
       sources.heatmap = { type: 'geojson', data: `trail://heatmap/heatmap.json?v=${heatVersion}`, tolerance: 0.3, maxzoom: 15 };
-      const width = (extra: number): any => ['interpolate', ['linear'], ['zoom'], 2, 1.6 + extra, 9, 2 + extra, 13, 3.5 + extra, 16, 6 + extra, 19, 10 + extra];
+      // Line width scales the line and, more gently, its outline.
+      const w = def.width ?? 1;
+      const width = (extra: number): any => {
+        const e = extra * Math.min(1, Math.sqrt(w));
+        return ['interpolate', ['linear'], ['zoom'], 2, 1.6 * w + e, 9, 2 * w + e, 13, 3.5 * w + e, 16, 6 * w + e, 19, 10 * w + e];
+      };
       const layout: any = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'n'] };
       const color: any = bands.length > 1 ? ['step', ['get', 'n'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;
       const isLine: any = ['==', ['geometry-type'], 'LineString'];

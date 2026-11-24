@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import test from 'node:test';
-import { bandLabels, checkFile, DEFAULTS, FILES, fileText, mapOrigins, parseConfig, prettyJson } from '../src/core/config.ts';
+import { bandLabels, checkFile, DEFAULTS, FILES, fileText, layerState, mapOrigins, parseConfig, prettyJson } from '../src/core/config.ts';
 
 const parse = (files: Record<string, unknown>) =>
   parseConfig(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])));
@@ -101,6 +101,19 @@ test('bad layers are left out, good ones kept, and there is always one heatmap',
 test('a heatmap layer moved down stays there', () => {
   const { config } = parse({ 'layers.json': { layers: [{ id: 'openfreemap', type: 'openfreemap' }, { id: 'heatmap', type: 'heatmap' }] } });
   assert.deepEqual(config.layers.map((l) => l.id), ['openfreemap', 'heatmap']);
+});
+
+test('ride line width is read, checked, and left out of the file when normal', () => {
+  const read = (width: unknown) => parse({ 'layers.json': { layers: [{ id: 'heatmap', type: 'heatmap', width }] } });
+  const thin = read(0.5).config.layers[0]!;
+  assert.equal(thin.type === 'heatmap' && thin.width, 0.5);
+  assert.equal(layerState(thin).width, 0.5);
+  const odd = read(9);
+  assert.equal((odd.config.layers[0] as any).width, undefined);
+  assert.match(odd.problems.map((p) => p.message).join(' '), /width/);
+  assert.equal((read(1).config.layers[0] as any).width, undefined);
+  assert.equal(layerState(DEFAULTS.layers[0]!).width, 1);
+  assert.ok(!fileText('layers.json', DEFAULTS).includes('width'));
 });
 
 test('map origins for the security policy', () => {

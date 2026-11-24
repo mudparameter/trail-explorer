@@ -32,7 +32,8 @@ interface LayerBase {
   opacity: number;
 }
 export type LayerDef =
-  | (LayerBase & { type: 'heatmap' })
+  /** `width` scales how thick ride lines are; left out means 1. */
+  | (LayerBase & { type: 'heatmap'; width?: number })
   | (LayerBase & { type: 'openfreemap' })
   | (LayerBase & { type: 'raster'; tiles: string[]; tileSize: number; minzoom: number; maxzoom: number; bounds?: Bounds; attribution: string })
   | (LayerBase & { type: 'file'; file: string });
@@ -303,9 +304,18 @@ function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): He
   };
 }
 
+/** How thin or thick ride lines can be, against the usual width. */
+export const MIN_WIDTH = 0.25;
+export const MAX_WIDTH = 3;
+
+/** What the sidebar changes on a layer. */
+export function layerState(l: LayerDef): { id: string; on: boolean; opacity: number; width?: number } {
+  return l.type === 'heatmap' ? { id: l.id, on: l.on, opacity: l.opacity, width: l.width ?? 1 } : { id: l.id, on: l.on, opacity: l.opacity };
+}
+
 const LAYER_TYPES: LayerType[] = ['heatmap', 'openfreemap', 'raster', 'file'];
 const KNOWN: Record<LayerType, string[]> = {
-  heatmap: [],
+  heatmap: ['width'],
   openfreemap: [],
   raster: ['tiles', 'tileSize', 'minzoom', 'maxzoom', 'bounds', 'attribution'],
   file: ['file'],
@@ -355,7 +365,10 @@ function readLayers(o: Record<string, unknown> | null, problems: Problem[]): Lay
     };
     const note = f.get<string | null>('note', null, text(100), 'It is left out.');
     if (note) base.note = note;
-    if (type === 'heatmap' || type === 'openfreemap') out.push({ ...base, type });
+    if (type === 'heatmap') {
+      const width = f.get('width', 1, number(MIN_WIDTH, MAX_WIDTH));
+      out.push(width === 1 ? { ...base, type } : { ...base, type, width });
+    } else if (type === 'openfreemap') out.push({ ...base, type });
     else if (type === 'file') {
       const file = (raw as any).file;
       if (typeof file !== 'string' || !/^maps\/[^/\\]+\.(pmtiles|mbtiles)$/i.test(file) || file.includes('..')) {
