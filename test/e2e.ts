@@ -328,6 +328,89 @@ await areaRow(0).getByRole('button', { name: 'List roads and trails' }).click();
 await w.getByRole('button', { name: /Ridge trail/ }).waitFor();
 assert.equal(overpass.calls, calls);
 await w.getByRole('button', { name: 'Close the list' }).click();
+
+// Circle outlines are solid black unless set otherwise.
+const edgePaint = (p: string) => w.evaluate((p) => JSON.stringify((window as any).__map.getPaintProperty('roads-area-line', p) ?? null), p);
+assert.equal(await edgePaint('line-color'), '"#000000"');
+assert.equal(await edgePaint('line-dasharray'), 'null');
+
+// Groups: circles that cover one place go under one name, separate or joined into one area.
+const groupsFile = () => JSON.parse(readFileSync(cfgFile('areas.json'), 'utf8')).groups as any[] | undefined;
+await areaRow(0).getByLabel('Group').selectOption('+');
+await w.getByLabel('New group name').fill('Ridge');
+await w.getByRole('button', { name: 'Make group' }).click();
+await waitFor(() => groupsFile()?.length === 1 && areasFile()[0].group === groupsFile()![0].id, 'group made');
+assert.match(groupsFile()![0].id, /^g-[a-z0-9]{6}$/);
+assert.equal(groupsFile()![0].joined, false);
+const groupRow = w.locator('.areas > li[data-group]');
+await groupRow.getByText('1 circle', { exact: true }).waitFor();
+await groupRow.getByRole('button', { name: 'Details of Ridge' }).click();
+await groupRow.getByRole('button', { name: 'Draw a circle in this group' }).click();
+await w.getByText('It goes in Ridge.').waitFor();
+// Partly over the first, so joined they have one outline around both.
+await w.mouse.click(cx + 160, cy + 40);
+await w.mouse.move(cx + 210, cy + 40, { steps: 3 });
+await w.mouse.move(cx + 260, cy + 40, { steps: 3 });
+await w.mouse.click(cx + 260, cy + 40);
+await waitFor(() => areasFile().length === 2 && areasFile()[1].group === groupsFile()![0].id, 'circle drawn in the group');
+await groupRow.getByText('2 circles', { exact: true }).waitFor();
+assert.equal(await groupRow.locator('.group-areas > li').count(), 2, 'separate: both circles listed under the group');
+// Separate, each circle has its own edge.
+await w.waitForFunction(() => (window as any).__map.getStyle().sources['roads-area-edge']?.data?.features?.length === 2);
+await groupRow.getByLabel('Join into one area').check();
+await waitFor(() => groupsFile()![0].joined === true, 'group joined');
+await groupRow.locator('.group-areas').waitFor({ state: 'detached' });
+await groupRow.getByText(/m trails · .* m tracks/).waitFor({ timeout: 20000 });
+// Joined, it is one area with one outline, and one list.
+await w.waitForFunction(() => (window as any).__map.getStyle().sources['roads-area-edge']?.data?.features?.length === 1);
+await groupRow.getByRole('button', { name: 'List roads and trails' }).click();
+await w.locator('.roads header').getByText('Ridge').waitFor();
+await w.locator('.roads header').getByText('2 circles, joined').waitFor();
+await w.getByRole('button', { name: /Ridge trail/ }).click();
+await w.waitForFunction(() => !!(window as any).__map.getLayer('roads-selected'));
+await w.waitForTimeout(600); await idle();
+await shot('16b-group-joined');
+await w.getByRole('button', { name: 'Close the list' }).click();
+await groupRow.getByLabel('Join into one area').uncheck();
+await waitFor(() => groupsFile()![0].joined === false, 'group separate');
+await w.waitForFunction(() => (window as any).__map.getStyle().sources['roads-area-edge']?.data?.features?.length === 2);
+await w.waitForTimeout(600); await idle();
+await shot('16a-group-separate');
+await groupRow.getByLabel('Join into one area').check();
+await waitFor(() => groupsFile()![0].joined === true, 'group joined again');
+await groupRow.getByRole('button', { name: 'List roads and trails' }).click();
+await w.locator('.roads header').getByText('2 circles, joined').waitFor();
+await w.getByRole('button', { name: 'Close the list' }).click();
+// The group's checkbox turns all its circles off and on.
+await groupRow.getByRole('checkbox').first().uncheck();
+await waitFor(() => areasFile().every((a) => a.on === false), 'group off');
+await groupRow.getByRole('checkbox').first().check();
+await waitFor(() => areasFile().every((a) => a.on === true), 'group on');
+
+// The outline is set in Customize, and saved in map.json.
+await w.getByRole('button', { name: 'Customize' }).click();
+const circlesSection = w.locator('section', { hasText: 'Roads and trails circles' });
+await circlesSection.getByLabel('Outline colour', { exact: true }).fill('#ff0000');
+await circlesSection.getByLabel('Thickness (px)').fill('4');
+await circlesSection.locator('select').selectOption('dotted');
+await circlesSection.getByRole('button', { name: 'Save' }).click();
+const mapFile = () => JSON.parse(readFileSync(cfgFile('map.json'), 'utf8'));
+await waitFor(() => mapFile().circles?.style === 'dotted', 'outline saved');
+assert.deepEqual(mapFile().circles, { color: '#ff0000', width: 4, style: 'dotted' });
+await shot('16c-customize-circles');
+await w.getByRole('button', { name: 'Map', exact: true }).click();
+await w.waitForFunction(() => JSON.stringify((window as any).__map.getPaintProperty('roads-area-line', 'line-dasharray')) === '[0,2]');
+assert.equal(await edgePaint('line-color'), '"#ff0000"');
+await w.waitForTimeout(600); await idle();
+await shot('16d-dotted-outline');
+
+// Ungroup keeps the circles; then the extra one goes.
+await groupRow.getByRole('button', { name: 'Ungroup' }).click();
+await waitFor(() => groupsFile() === undefined && areasFile().every((a) => a.group === undefined), 'ungrouped');
+await areaRow(1).getByRole('button', { name: /^Delete/ }).click();
+await w.getByRole('button', { name: 'Delete', exact: true }).click();
+await waitFor(() => areasFile().length === 1, 'extra circle deleted');
+
 // Escape stops drawing.
 await w.getByRole('button', { name: 'Draw a circle' }).click();
 await w.keyboard.press('Escape');

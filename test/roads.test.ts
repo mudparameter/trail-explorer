@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipToCircle, distance, overpassQuery, parseOverpass, readOverpass, roadsGeoJson, tileBounds, tileKey, tilesFor, tileXY } from '../src/core/roads.ts';
+import { clipToCircle, clipToCircles, distance, overpassQuery, parseOverpass, readOverpass, roadsGeoJson, tileBounds, tileKey, tilesFor, tileXY } from '../src/core/roads.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 
 const C: [number, number] = [0, 0];
@@ -101,4 +101,18 @@ test('distances read naturally', () => {
   assert.equal(distance(850), '850 m');
   assert.equal(distance(3420), '3.4 km');
   assert.equal(distance(12_600), '13 km');
+});
+
+test('a line is clipped to several circles at once, counting overlaps once', () => {
+  const a = { center: C, radius: 200 }, b = { center: P(300), radius: 200 };
+  // Across both: one piece from -200 to 500, since they overlap from 100 to 200.
+  const r = clipToCircles([P(-500), P(800)], [a, b]);
+  assert.equal(r.lines.length, 1);
+  assert.ok(Math.abs(r.length - 700) < 0.01, String(r.length));
+  // Apart: two pieces.
+  const apart = clipToCircles([P(-500), P(1500)], [a, { center: P(1000), radius: 200 }]);
+  assert.equal(apart.lines.length, 2);
+  assert.ok(Math.abs(apart.length - 800) < 0.01);
+  // One circle gives the same as clipToCircle.
+  assert.deepEqual(clipToCircles([P(-500), P(500)], [a]), clipToCircle([P(-500), P(500)], C, 200));
 });

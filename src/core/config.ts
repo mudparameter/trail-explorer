@@ -13,7 +13,7 @@
 // by its default, so one typo never stops the app.
 import { ACTIVITY_IDS, type Activity } from './activities.ts';
 import type { Bounds, View } from './api.ts';
-import { AREAS_FILE, parseAreas, type Area } from './areas.ts';
+import { AREAS_FILE, parseAreas, type Area, type AreaGroup } from './areas.ts';
 import { DEFAULT_OVERPASS } from './roads.ts';
 import { parseZones, type Zone } from './zones.ts';
 
@@ -42,6 +42,18 @@ export type LayerDef =
   | (LayerBase & { type: 'file'; file: string });
 export type LayerType = LayerDef['type'];
 
+/** How the edge of a drawn circle is drawn. */
+export type LineStyle = 'solid' | 'dashed' | 'dotted';
+export const LINE_STYLES: LineStyle[] = ['solid', 'dashed', 'dotted'];
+export interface CircleLine {
+  color: string;
+  /** Pixels. */
+  width: number;
+  style: LineStyle;
+}
+export const MIN_LINE = 0.5;
+export const MAX_LINE = 8;
+
 export interface MapConfig {
   /** Where the map opens. Null fits the map to your rides. */
   view: View | null;
@@ -50,6 +62,8 @@ export interface MapConfig {
   background: string;
   /** Overpass API servers that road and trail searches ask for OpenStreetMap data, tried in order. */
   overpass: string[];
+  /** The edge of the circles drawn under Roads and trails. */
+  circles: CircleLine;
 }
 export interface HeatmapConfig {
   bands: Band[];
@@ -70,6 +84,8 @@ export interface Config {
   layers: LayerDef[];
   zones: Zone[];
   areas: Area[];
+  /** Groups of areas. */
+  groups: AreaGroup[];
 }
 export interface Problem {
   file: string;
@@ -86,7 +102,7 @@ export const FILES = ['map.json', 'heatmap.json', 'layers.json'] as const;
 const OSM = '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
 
 export const DEFAULTS: Config = {
-  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee', overpass: DEFAULT_OVERPASS },
+  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee', overpass: DEFAULT_OVERPASS, circles: { color: '#000000', width: 2, style: 'solid' } },
   heatmap: {
     bands: [
       { from: 1, color: '#2f6bff' },
@@ -121,6 +137,7 @@ export const DEFAULTS: Config = {
   ],
   zones: [],
   areas: [],
+  groups: [],
 };
 
 /** Legend text for each band: "1", "2 to 3", "40 or more". */
@@ -168,9 +185,11 @@ export function parseConfig(files: Record<string, string>): { config: Config; pr
     problems.push(...r.problems.map((message) => ({ file: path, message })));
   }
   let areas: Area[] = [];
+  let groups: AreaGroup[] = [];
   if (files[AREAS_FILE] !== undefined) {
     const r = parseAreas(files[AREAS_FILE]);
     areas = r.areas;
+    groups = r.groups;
     problems.push(...r.problems.map((message) => ({ file: AREAS_FILE, message })));
   }
   return {
@@ -180,6 +199,7 @@ export function parseConfig(files: Record<string, string>): { config: Config; pr
       layers: readLayers(json('layers.json'), problems),
       zones,
       areas,
+      groups,
     },
     problems,
   };
@@ -268,8 +288,8 @@ const within = <T>(label: string, check: (v: unknown) => T) => (v: unknown): T =
 
 function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapConfig {
   const d = DEFAULTS.map;
-  if (!o) return { ...d };
-  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background', 'overpass']);
+  if (!o) return { ...d, circles: { ...d.circles } };
+  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background', 'overpass', 'circles']);
   const view = f.get<View | null>('view', d.view, (v) => {
     if (v === null) return null;
     if (!v || typeof v !== 'object' || Array.isArray(v)) return bad('should be { "center": [lon, lat], "zoom": 11 } or null.');
@@ -281,7 +301,20 @@ function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapCon
     f.bad('"maxZoom" is smaller than "minZoom". Using the default instead.');
     maxZoom = Math.max(minZoom, d.maxZoom);
   }
-  return { view, minZoom, maxZoom, background: f.get('background', d.background, color), overpass: f.get('overpass', d.overpass, servers) };
+  let circles = { ...d.circles };
+  const c = o.circles;
+  if (c !== undefined) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) f.bad('"circles" should be { "color": "#000000", "width": 2, "style": "solid" }. Using the default instead.');
+    else {
+      const cf = new Fields('map.json', c as Record<string, unknown>, problems, ['color', 'width', 'style'], '"circles": ');
+      circles = {
+        color: cf.get('color', d.circles.color, color),
+        width: cf.get('width', d.circles.width, number(MIN_LINE, MAX_LINE)),
+        style: cf.get('style', d.circles.style, (v) => (LINE_STYLES.includes(v as LineStyle) ? (v as LineStyle) : bad(`should be ${LINE_STYLES.map((x) => `"${x}"`).join(', ')}.`))),
+      };
+    }
+  }
+  return { view, minZoom, maxZoom, background: f.get('background', d.background, color), overpass: f.get('overpass', d.overpass, servers), circles };
 }
 
 function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): HeatmapConfig {
@@ -451,7 +484,7 @@ export function tileUrlProblem(tiles: unknown): string | null {
 // --- writing --------------------------------------------------------------------
 
 const NOTES: Record<(typeof FILES)[number], string> = {
-  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. See README.md.',
+  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. "circles" is how drawn circles look. See README.md.',
   'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. "hide" leaves kinds of activity out. radius, angle and step change how rides are matched. See README.md.',
   'layers.json': 'Every layer, top first. Types: heatmap, roads, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
 };

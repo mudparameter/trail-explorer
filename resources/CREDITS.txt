@@ -2,3 +2,4 @@ Noto Sans: SIL Open Font License 1.1 (https://openfontlicense.org), packaged by 
 Map icons: VersaTiles (base) and OpenFreeMap/Maki (ofm, CC0).
 liberty.json: derived from OpenFreeMap Liberty / OSM Liberty / OSM Bright. Code BSD 3-Clause, design CC BY 4.0.
 shortbread.json: generated with @versatiles/style (MIT).
+Elevation: Terrain Tiles on AWS (Mapzen, Terrarium format). Sources include USGS 3DEP and NED, SRTM, GMTED2010, ETOPO1 and others; see https://github.com/tilezen/joerd/blob/master/docs/attribution.md

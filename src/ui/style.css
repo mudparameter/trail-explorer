@@ -84,3 +84,96 @@ ul.error { list-style: disc; padding-left: 18px; }
 details summary { cursor: pointer; font-weight: 600; }
 .page.wide .form { max-width: none; }
 .fields { width: 100%; }
+
+/* --- Route planner: its own mode, with a coloured bar so it is clearly not the main map --- */
+button.primary { background: #1d4ed8; color: #fff; border: 1px solid #1e40af; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+button.primary:disabled { background: #93a5d8; border-color: #93a5d8; cursor: default; }
+.planner-cta { margin: 10px 0 4px; }
+.planner { display: flex; flex-direction: column; height: 100%; }
+.mode-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: #1d4ed8; color: #fff; }
+.mode-bar strong { font-size: 15px; }
+.mode-bar .small { color: #dbe4ff; flex: 1; }
+.planner-body { flex: 1; min-height: 0; display: flex; }
+.plan-side { width: 300px; }
+.step { border-bottom: 1px solid #ddd; padding: 8px 0; }
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.step-head .num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #d1d5db; color: #111; font-size: 12px; font-weight: 600; }
+.step-head.current .num { background: #1d4ed8; color: #fff; }
+.step-head.later { color: #888; }
+.step-head .summary { flex-basis: 100%; padding-left: 28px; }
+.step-head .summary + .link { padding-left: 28px; }
+.step > :not(.step-head) { margin-left: 28px; }
+.step .choose li { padding: 2px 0; }
+.step .choice { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+.step button { margin-top: 6px; }
+.step .dot, .route-card .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; }
+.form.ride { gap: 8px; margin: 6px 0 0 28px; max-width: none; }
+.form.ride .row { flex-wrap: nowrap; }
+.form.ride input[type='number'] { width: 90px; flex: none; }
+.form.ride fieldset { border: 1px solid #ccc; padding: 4px 8px 6px; margin: 0; width: 100%; }
+.form.ride legend { font-weight: 600; padding: 0 3px; }
+.form label.inline { flex-direction: row; align-items: center; gap: 5px; display: flex; }
+.route-cards { list-style: none; margin: 6px 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.route-card { border: 1px solid #ccc; border-radius: 6px; padding: 6px 8px; background: #fff; }
+.route-card.on { border-color: #1d4ed8; box-shadow: 0 0 0 2px #bfd0ff; }
+.route-card .pick { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; }
+.route-card .pick .name { font-weight: 600; flex: 1; }
+.swatch.wide { width: 18px; height: 6px; }
+.swatch.dashed { background: repeating-linear-gradient(90deg, #c2410c 0 6px, transparent 6px 9px); width: 18px; }
+.swatch.dotted { background: repeating-linear-gradient(90deg, #9ca3af 0 2px, transparent 2px 5px); width: 18px; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 9px; white-space: nowrap; border: 1px solid; }
+.badge.level-1 { color: #166534; background: #dcfce7; border-color: #86efac; }
+.badge.level-2 { color: #1e3a8a; background: #dbeafe; border-color: #93c5fd; }
+.badge.level-3 { color: #7c2d12; background: #ffedd5; border-color: #fdba74; }
+.badge.level-4 { color: #fff; background: #111; border-color: #111; }
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; margin: 4px 0; }
+.stats dt { color: #555; }
+.stats dd { margin: 0; }
+.warn { color: #9a3412; }
+.warn::before { content: '⚠ '; }
+.plan-key { margin-top: 10px; }
+.plan-key p { display: flex; align-items: center; gap: 6px; }
+.plan-key .credit { display: block; margin-top: 6px; }
+.profile-panel { border-top: 1px solid #bbb; padding: 6px 12px 8px; background: #fff; }
+.profile-panel .close, .route-view .close { border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.profile { margin: 4px 0 0; }
+.profile svg { width: 100%; height: 170px; display: block; font-size: 10px; fill: #555; cursor: crosshair; }
+.profile .ground { fill: #c7d2fe; }
+.profile .outline { fill: none; stroke: #1e3a8a; stroke-width: 1.5; }
+.profile .grid { stroke: #e5e7eb; }
+.profile .steep-up { fill: rgba(220, 38, 38, 0.18); }
+.profile .steep-down { fill: rgba(124, 58, 237, 0.18); }
+.profile .cursor { stroke: #111; stroke-dasharray: 2 2; }
+.profile .dot { fill: #111; }
+.profile .key { display: inline-block; width: 10px; height: 10px; vertical-align: middle; }
+.profile .key.steep-up { background: rgba(220, 38, 38, 0.35); }
+.profile .key.steep-down { background: rgba(124, 58, 237, 0.35); }
+
+/* --- Saved routes --- */
+.page.routes-page { max-width: 1100px; }
+table.routes { border-collapse: collapse; width: 100%; margin-top: 8px; }
+table.routes th, table.routes td { border-bottom: 1px solid #ddd; padding: 4px 8px 4px 0; text-align: left; vertical-align: middle; }
+table.routes td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.routes tr.on td { background: #eef2ff; }
+table.routes .sort { border: 0; background: none; font: inherit; font-weight: 600; padding: 0; cursor: pointer; white-space: nowrap; }
+table.routes .actions .row { flex-wrap: nowrap; }
+table.routes .name input { min-width: 160px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.route-view { margin-top: 16px; border: 1px solid #ccc; border-radius: 6px; padding: 8px 12px; }
+.route-view h2 { border: 0; margin: 0; }
+.route-map { height: 360px; display: flex; margin: 6px 0; }
+.areas .group-areas { margin: 6px 0 0 14px; padding-left: 8px; border-left: 2px solid #d4d4d8; }
+.areas .members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.areas .members li { justify-content: space-between; }
+.area-details label.small.check { flex-direction: row; align-items: center; gap: 6px; }
+.choose .nested { margin: 2px 0 0 22px; padding: 0; }
+.circle-preview { display: block; margin-top: 4px; border-radius: 4px; }
+.ride .mode { display: flex; flex-direction: row; gap: 16px; padding: 4px 0 2px; font-weight: 600; }
+.ride .mode label { display: flex; flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+.form.ride .row.distance { flex-wrap: wrap; gap: 4px; }
+.form.ride .row.distance input[type='number'] { width: 54px; }
+.form.ride label.fav { display: block; }
+.form.ride label.fav .small { display: block; margin: 2px 0 0 22px; }
+.ride .magic-note { border: 1px solid #c4b5fd; background: #faf5ff; border-radius: 6px; padding: 6px 10px; margin: 0; }
+.ride .magic-go { background: #7c3aed; color: #fff; border-color: #6d28d9; }
+.plan-key label { display: block; margin-top: 4px; }
