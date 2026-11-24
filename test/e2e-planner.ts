@@ -72,7 +72,7 @@ await new Promise<void>((ok) => tsrv.listen(0, '127.0.0.1', ok));
 
 // Rides along the western half of the southern rows.
 const ride = (j: number) => Array.from({ length: 200 }, (_, i) => Q(-HALF + (i / 199) * HALF, j * GAP - HALF));
-const f = await fakeGarmin({ rides: [2, 4, 6, 8].map((j, i) => ({ id: 500 + i, start: `2025-0${i + 1}-01 08:00:00`, body: zipOf('a.fit', fit(ride(j), `2025-0${i + 1}-01T08:00:00Z`)) })) });
+const f = await fakeGarmin({ rides: [2, 4, 6, 8, 4, 4, 4].map((j, i) => ({ id: 500 + i, start: `2025-0${i + 1}-01 08:00:00`, body: zipOf('a.fit', fit(ride(j), `2025-0${i + 1}-01T08:00:00Z`)) })) });
 
 const data = mkdtempSync(join(tmpdir(), 'te-plan-'));
 const app = await _electron.launch({
@@ -96,7 +96,7 @@ const waitFor = async (ok: () => boolean, what: string) => {
 try {
   await w.getByLabel('Garmin personal API key').fill(KEY);
   await w.getByRole('button', { name: 'Save key' }).click();
-  await w.getByText('4 rides on the map').waitFor({ timeout: 60000 });
+  await w.getByText('7 rides on the map').waitFor({ timeout: 60000 });
 
   // Draw an area over the grid.
   await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 13 }), MID);
@@ -150,6 +150,20 @@ try {
   const svg = (await w.getByRole('img', { name: 'Elevation profile' }).boundingBox())!;
   await w.mouse.move(svg.x + svg.width / 2, svg.y + svg.height / 2);
   await w.locator('.profile figcaption').getByText(/km \(.* mi\) · .* m \(.* ft\)/).waitFor();
+  // The profile fills its panel, and the mouse lines up with it: the ends of the line are the ends of the route.
+  const panel = (await w.locator('.profile-panel').boundingBox())!;
+  assert.ok(svg.width > panel.width - 40, `profile ${svg.width} px wide in a ${panel.width} px panel`);
+  const routeKm = Number(card.match(/Distance\s*([\d.]+) km/)![1]);
+  const kmAt = async (x: number) => {
+    await w.mouse.move(x, svg.y + svg.height / 2);
+    return Number((await w.locator('.profile figcaption').innerText()).match(/^([\d.]+) km/)![1]);
+  };
+  const atStart = await kmAt(svg.x + 46 + 1), atEnd = await kmAt(svg.x + svg.width - 50 - 1);
+  const atMid = await kmAt(svg.x + 46 + (svg.width - 96) / 2);
+  console.log('profile under the mouse:', atStart, atMid, atEnd, 'of', routeKm, 'km');
+  assert.ok(atStart < 0.05, `left end ${atStart}`);
+  assert.ok(Math.abs(atEnd - routeKm) < 0.1, `right end ${atEnd} of ${routeKm}`);
+  assert.ok(Math.abs(atMid - routeKm / 2) < 0.1, `middle ${atMid} of ${routeKm}`);
   await shot('2-routes');
 
   // Save one.
@@ -168,6 +182,110 @@ try {
   await w.locator('.route-card').nth(1).getByRole('button', { name: 'Save…' }).click();
   await w.locator('.route-card').nth(1).getByRole('button', { name: 'Save', exact: true }).click();
   await waitFor(() => saved().length === 2, 'second route saved');
+
+  // A limit on descents: every route keeps to it, or the planner says none can.
+  const steepest = async () => (await w.locator('.route-card').allInnerTexts()).map((t) => Number(t.match(/Steepest\s*↑ \d+% ↓ (\d+)%/)![1]));
+  const before = await steepest();
+  console.log('steepest descents, no limit:', before.join(' '));
+  const limit = Math.max(2, Math.min(...before) - 1);
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Steepest descent').fill(String(limit));
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await Promise.race([w.locator('.route-card').first().waitFor({ timeout: 30000 }), w.getByText(/No route from there keeps descents/).waitFor({ timeout: 30000 })]);
+  const after = await w.locator('.route-card').count() ? await steepest() : [];
+  console.log(`steepest descents, limit ${limit}%:`, after.join(' ') || 'none possible');
+  assert.ok(after.every((d) => d <= limit), `all within ${limit}%: ${after}`);
+  await shot('2b-descent-limit');
+
+  // And on climbs: the same, the other way.
+  const steepestUp = async () => (await w.locator('.route-card').allInnerTexts()).map((t) => Number(t.match(/Steepest\s*↑ (\d+)%/)![1]));
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Steepest descent').fill('');
+  await w.getByLabel('Steepest climb').fill(String(limit));
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await Promise.race([w.locator('.route-card').first().waitFor({ timeout: 30000 }), w.getByText(/No route from there keeps climbs/).waitFor({ timeout: 30000 })]);
+  const ups = await w.locator('.route-card').count() ? await steepestUp() : [];
+  console.log(`steepest climbs, limit ${limit}%:`, ups.join(' ') || 'none possible');
+  assert.ok(ups.every((d) => d <= limit), `all climbs within ${limit}%: ${ups}`);
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Steepest climb').fill('');
+
+  // A new set: other routes from the same request.
+  const ids = () => w.locator('.route-card').evaluateAll((els) => els.map((e) => e.getAttribute('data-route')!));
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await w.locator('.route-card').first().waitFor({ timeout: 30000 });
+  const first = await ids();
+  await w.getByRole('button', { name: 'Generate new routes' }).click();
+  await w.waitForFunction((was) => { const now = [...document.querySelectorAll('.route-card')].map((e) => e.getAttribute('data-route')); return now.length > 0 && now.every((id) => !was.includes(id!)); }, first, { timeout: 30000 });
+  const second = await ids();
+  console.log('new routes:', first.join(' '), '→', second.join(' '));
+
+  // Ridden paths: highlighted, darkened or hidden on the planner's map.
+  const riddenPaint = () => w.evaluate(() => { const m = (window as any).__planMap; return m.getLayer('net-ridden') ? m.getPaintProperty('net-ridden', 'line-color') : null; });
+  assert.equal(await riddenPaint(), '#2563eb');
+  await w.getByLabel("Paths you've ridden").selectOption('dark');
+  await w.waitForFunction(() => (window as any).__planMap.getLayer('net-ridden') && (window as any).__planMap.getPaintProperty('net-ridden', 'line-color') === '#27272a');
+  await w.waitForTimeout(500);
+  await shot('2c-ridden-dark');
+  await w.getByLabel("Paths you've ridden").selectOption('hide');
+  await w.waitForFunction(() => !(window as any).__planMap.getLayer('net-ridden'));
+  // Hidden as ridden, they still show as paths: the dashed lines now include them.
+  const pathFilter = () => w.evaluate(() => JSON.stringify((window as any).__planMap.getFilter('net-line')));
+  assert.doesNotMatch(await pathFilter(), /ridden/);
+  await w.waitForTimeout(500);
+  await shot('2c-ridden-hidden');
+  // Heatmap: ridden paths in the heatmap's colours by times ridden, with its outline and legend.
+  await w.getByLabel("Paths you've ridden").selectOption('heatmap');
+  await w.waitForFunction(() => !!(window as any).__planMap.getLayer('net-ridden-outline'));
+  assert.match(JSON.stringify(await w.evaluate(() => (window as any).__planMap.getPaintProperty('net-ridden', 'line-color'))), /"step",\["get","passes"\]/);
+  const passes = await w.evaluate(() => (window as any).__planMap.getStyle().sources.net.data.features.map((f: any) => f.properties.passes));
+  assert.ok(Math.max(...passes) >= 4, `row 4 ridden 4 times: ${Math.max(...passes)}`);
+  await w.locator('.plan-key .legend').getByText('4 to 7').waitFor();
+  await w.waitForTimeout(500);
+  await shot('2c-ridden-heatmap');
+  await w.getByLabel("Paths you've ridden").selectOption('show');
+  await w.waitForFunction(() => !!(window as any).__planMap.getLayer('net-ridden'));
+  assert.match(await pathFilter(), /ridden/);
+
+  // Favourites: row 4, ridden four times, is taken in.
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Include my favourite trails').check();
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await w.locator('.route-card').first().getByText('Favourites').waitFor({ timeout: 30000 });
+  const favs = (await w.locator('.route-card').allInnerTexts()).map((t) => t.match(/Favourites\s*([\d.]+) km/)?.[1] ?? '0');
+  console.log('favourites per route, km:', favs.join(' '));
+  assert.ok(favs.filter((x) => Number(x) > 0).length >= 2);
+  await shot('2e-favourites');
+
+  // Magic: only distance and difficulty count. A climbing wish of 9,000 m is ignored.
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  assert.ok(await w.getByRole('button', { name: '✨ Magic routes' }).isDisabled(), 'needs a difficulty');
+  await w.getByLabel('Climbing', { exact: true }).fill('9000');
+  await w.getByLabel('Hard', { exact: true }).check();
+  await w.getByLabel('Magic distance tolerance').fill('2');
+  await w.getByRole('button', { name: '✨ Magic routes' }).click();
+  await w.locator('.route-card').first().waitFor({ timeout: 60000 });
+  const magicCards = await w.locator('.route-card').allInnerTexts();
+  const facts = magicCards.map((t) => `${t.match(/Distance\s*([\d.]+) km/)![1]} km ${t.match(/Easy|Moderate|Hard|Very hard/)![0]}`);
+  console.log('magic, 6 ± 2 km, hard:', facts.join(' | '));
+  const kmOf = (t: string) => Number(t.match(/Distance\s*([\d.]+) km/)![1]);
+  const fits = magicCards.filter((t) => Math.abs(kmOf(t) - 6) <= 2.05 && /Hard/.test(t.split('\n').slice(0, 3).join(' ')));
+  if (fits.length < magicCards.length) await w.getByText(/Closest that could be found/).waitFor();
+  assert.ok(magicCards.every((t) => kmOf(t) < 20), 'the climbing wish was ignored');
+  // Favourites are still ticked, and magic takes them in.
+  const magicFavs = magicCards.map((t) => Number(t.match(/Favourites\s*([\d.]+) km/)?.[1] ?? 0));
+  console.log('magic favourites per route, km:', magicFavs.join(' '));
+  assert.ok(magicFavs.filter((x) => x > 0).length >= 2, 'magic routes take in favourites');
+  await shot('2d-magic');
+  const magicIds = await ids();
+  await w.getByRole('button', { name: 'Generate new routes' }).click();
+  await w.waitForFunction((was) => { const now = [...document.querySelectorAll('.route-card')].map((e) => e.getAttribute('data-route')); return now.length > 0 && now.every((id) => !was.includes(id!)); }, magicIds, { timeout: 60000 })
+    .catch(async () => { await w.getByText(/No other routes from there/).waitFor({ timeout: 1000 }); console.log('magic: no other routes'); });
+  console.log('magic, new set:', (await w.locator('.route-card').allInnerTexts()).map((t) => `${kmOf(t)} km`).join(' | '));
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Climbing', { exact: true }).fill('');
+  await w.getByLabel('Any', { exact: true }).check();
+  await w.getByLabel('Include my favourite trails').uncheck();
 
   // The saved routes table: sort, rename, view, download, delete.
   await w.getByRole('button', { name: 'Saved routes' }).click();

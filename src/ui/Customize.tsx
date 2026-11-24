@@ -2,7 +2,7 @@
 // way the app does when it reads them, so what is saved always loads.
 import { useState, type ReactNode } from 'react';
 import type { ConfigFile, ConfigState, View } from '../core/api.ts';
-import { bandLabels, checkFile, DEFAULTS, newMapIndex, type Band, type HeatmapConfig, type LayerDef, type MapConfig } from '../core/config.ts';
+import { bandLabels, checkFile, DEFAULTS, LINE_STYLES, MAX_LINE, MIN_LINE, newMapIndex, type Band, type CircleLine, type HeatmapConfig, type LayerDef, type LineStyle, type MapConfig } from '../core/config.ts';
 import { trail } from './api.ts';
 
 interface Props {
@@ -26,11 +26,7 @@ export function Customize({ cfg, view, showOnMap }: Props) {
       <MapSection key={JSON.stringify(config.map)} value={config.map} view={view} showOnMap={showOnMap} />
       <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />
       <LayersSection key={JSON.stringify(config.layers)} value={config.layers} cfg={cfg} />
-      <h2>Roads and trails</h2>
-      <p>
-        Circles drawn under Roads and trails are kept in <code>areas.json</code>, one per line. Add or change them there by hand if you
-        like. The road data they download is kept by the app, shared between overlapping circles, and not in this folder.
-      </p>
+      <CirclesSection key={`circles ${JSON.stringify(config.map)}`} value={config.map} />
       <h2>Excluded zones</h2>
       <p>
         Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
@@ -176,6 +172,58 @@ function MapSection({ value, view, showOnMap }: { value: MapConfig; view: View |
         </div>
       )}
     </Section>
+  );
+}
+
+const STYLE_NAMES: Record<LineStyle, string> = { solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted' };
+
+/** How drawn circles look. Kept in map.json with the rest of the map's look. */
+function CirclesSection({ value }: { value: MapConfig }) {
+  return (
+    <Section title="Roads and trails circles" file="map.json" value={value} defaults={{ ...value, circles: DEFAULTS.map.circles }} toFile={(v) => v}
+      intro={
+        <p className="small">
+          How the edge of the circles drawn under Roads and trails looks, on the map and in the route planner. The circles themselves,
+          and their groups, are kept in <code>areas.json</code>, one per line. The road data they download is kept by the app, shared
+          between overlapping circles, and not in this folder.
+        </p>
+      }>
+      {(d, set) => {
+        const c = (x: Partial<CircleLine>) => set({ ...d, circles: { ...d.circles, ...x } });
+        return (
+          <div className="form">
+            <div className="fields">
+              <Colour label="Outline colour" value={d.circles.color} set={(x) => c({ color: x })} />
+              <Num label="Thickness (px)" value={d.circles.width} min={MIN_LINE} max={MAX_LINE} step={0.5} set={(x) => c({ width: x })} />
+              <label>
+                Line
+                <select value={d.circles.style} onChange={(e) => c({ style: e.target.value as LineStyle })}>
+                  {LINE_STYLES.map((x) => <option key={x} value={x}>{STYLE_NAMES[x]}</option>)}
+                </select>
+              </label>
+            </div>
+            <div>
+              <strong>Preview</strong>
+              <CirclePreview line={d.circles} />
+            </div>
+          </div>
+        );
+      }}
+    </Section>
+  );
+}
+
+/** Two overlapping circles, drawn as the map would. */
+function CirclePreview({ line }: { line: CircleLine }) {
+  const w = Number.isFinite(line.width) ? Math.min(Math.max(line.width, MIN_LINE), MAX_LINE) : 2;
+  const colour = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(line.color) ? line.color : '#000000';
+  const dash = line.style === 'dashed' ? `${w * 3} ${w * 2}` : line.style === 'dotted' ? `0 ${w * 2}` : undefined;
+  return (
+    <svg className="circle-preview" width="220" height="110" viewBox="0 0 220 110" role="img" aria-label="Preview of the circle outline">
+      <rect width="220" height="110" fill="#eeeeee" />
+      <circle cx="80" cy="55" r="40" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} />
+      <circle cx="145" cy="55" r="35" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} />
+    </svg>
   );
 }
 

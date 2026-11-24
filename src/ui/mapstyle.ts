@@ -1,7 +1,8 @@
 // Builds one MapLibre style from the config's layers.
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl';
 import type { MapInfo } from '../core/api.ts';
-import type { Config } from '../core/config.ts';
+import { unionEdge, type Circle } from '../core/areas.ts';
+import type { CircleLine, Config } from '../core/config.ts';
 import { KINDS, roadsGeoJson, type Road } from '../core/roads.ts';
 import { circleRing, zonesGeoJson } from '../core/zones.ts';
 
@@ -9,16 +10,40 @@ export const ZONES = 'zones';
 export const ZONE_COLOR = '#d0021b';
 /** The circle being drawn. MapView changes its data as the mouse moves. */
 export const DRAW = 'draw';
-export const AREA_COLOR = '#1d4ed8';
 export const ROAD_LINES = 'roads-line';
+
+/** Paint for the edge of drawn circles, as set in map.json. `ready` is a feature property: unready ones are fainter and finer. */
+export function circleLinePaint(c: CircleLine, ready: unknown = true): any {
+  return {
+    'line-color': c.color,
+    'line-width': ready === true ? c.width : ['case', ready, c.width, c.width * 0.75],
+    'line-opacity': ready === true ? 1 : ['case', ready, 1, 0.6],
+    // In line widths: dots are zero-length dashes with round ends.
+    ...(c.style === 'dashed' ? { 'line-dasharray': [3, 2] } : c.style === 'dotted' ? { 'line-dasharray': [0, 2] } : {}),
+  };
+}
+export const circleLineLayout = (c: CircleLine): any => (c.style === 'dotted' ? { 'line-cap': 'round', 'line-join': 'round' } : { 'line-join': 'round' });
+
+/** Drawn circles as map features: a fill for each circle, and one edge around circles that are drawn as one. */
+export function circleFeatures(shapes: { id: string; circles: Circle[]; ready?: boolean }[]) {
+  return {
+    fill: {
+      type: 'FeatureCollection' as const,
+      features: shapes.flatMap((a) => a.circles.map((c) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'Polygon' as const, coordinates: [circleRing(c.center, c.radius, 120)] } }))),
+    },
+    edge: {
+      type: 'FeatureCollection' as const,
+      features: shapes.map((a) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'MultiLineString' as const, coordinates: unionEdge(a.circles) } })),
+    },
+  };
+}
 
 /** Separates an area's id from a road's key in map features. */
 export const KEY_SEP = '|';
-/** An area to draw, with the roads to show in it. */
+/** An area to draw, with the roads to show in it. A joined group is one area with several circles. */
 export interface StyleArea {
   id: string;
-  center: [number, number];
-  radius: number;
+  circles: Circle[];
   ready: boolean;
   roads: Road[];
 }
@@ -175,14 +200,11 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       { id: 'zones-line', type: 'line', source: ZONES, paint: { 'line-color': ZONE_COLOR, 'line-width': 2, 'line-dasharray': [2, 1.5] } },
     );
   }
+  const line = config.map.circles;
   if (areas.length) {
-    sources['roads-area'] = {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: areas.map((a) => ({ type: 'Feature', properties: { id: a.id, ready: a.ready }, geometry: { type: 'Polygon', coordinates: [circleRing(a.center, a.radius, 120)] } })),
-      },
-    };
+    const shapes = circleFeatures(areas);
+    sources['roads-area'] = { type: 'geojson', data: shapes.fill };
+    sources['roads-area-edge'] = { type: 'geojson', data: shapes.edge };
     sources.roads = {
       type: 'geojson',
       data: { type: 'FeatureCollection', features: areas.flatMap((a) => roadsGeoJson(a.roads, a.id + KEY_SEP).features) },
@@ -191,9 +213,9 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     };
     // The circles stay on top, even with road lines off or moved down.
     out.push(
-      { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
+      { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': line.color, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
       // Areas still downloading have a fainter, finer edge.
-      { id: 'roads-area-line', type: 'line', source: 'roads-area', paint: { 'line-color': AREA_COLOR, 'line-width': ['case', ['get', 'ready'], 2, 1.5], 'line-opacity': ['case', ['get', 'ready'], 1, 0.6], 'line-dasharray': [3, 2] } },
+      { id: 'roads-area-line', type: 'line', source: 'roads-area-edge', layout: circleLineLayout(line), paint: circleLinePaint(line, ['get', 'ready']) },
     );
     if (selected) {
       const only: any = ['==', ['get', 'key'], selected];
@@ -207,8 +229,8 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
   if (drawing) {
     sources[DRAW] = { type: 'geojson', data: { type: 'FeatureCollection', features: [] } };
     out.push(
-      { id: 'draw-fill', type: 'fill', source: DRAW, paint: { 'fill-color': AREA_COLOR, 'fill-opacity': 0.1 } },
-      { id: 'draw-line', type: 'line', source: DRAW, paint: { 'line-color': AREA_COLOR, 'line-width': 2 } },
+      { id: 'draw-fill', type: 'fill', source: DRAW, paint: { 'fill-color': line.color, 'fill-opacity': 0.1 } },
+      { id: 'draw-line', type: 'line', source: DRAW, layout: circleLineLayout(line), paint: circleLinePaint(line) },
     );
   }
   return {

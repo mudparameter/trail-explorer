@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { areasText, newAreaId, parseAreas, type Area } from '../src/core/areas.ts';
+import { areasText, newAreaId, parseAreas, unionEdge, type Area } from '../src/core/areas.ts';
 import { parseConfig } from '../src/core/config.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 import { tilesFor } from '../src/core/roads.ts';
@@ -14,7 +14,7 @@ const C: [number, number] = [-0.47, 39.7];
 const K = M_PER_DEG * Math.cos((C[1] * Math.PI) / 180);
 /** A point x metres east and y metres north of C. */
 const P = (x: number, y = 0): [number, number] => [C[0] + x / K, C[1] + y / M_PER_DEG];
-const area = (id: string, center: [number, number], radius: number, more: Partial<Area> = {}): Area => ({ id, name: null, center, radius, on: true, hide: [], ...more });
+const area = (id: string, center: [number, number], radius: number, more: Partial<Area> = {}): Area => ({ id, name: null, center, radius, on: true, hide: [], group: null, ...more });
 
 // --- areas.json -----------------------------------------------------------------
 
@@ -30,20 +30,20 @@ test('areas.json is read, with optional fields and problems reported', () => {
     ],
   }));
   assert.equal(areas.length, 3);
-  assert.deepEqual(areas[0], { id: 'home', name: 'Calderona', center: [-0.47, 39.7], radius: 1500, on: false, hide: ['road'] });
+  assert.deepEqual(areas[0], { id: 'home', name: 'Calderona', center: [-0.47, 39.7], radius: 1500, on: false, hide: ['road'], group: null });
   assert.equal(areas[1]!.on, true);
   assert.match(areas[1]!.id, /^[a-z0-9-]+$/);
   assert.equal(parseAreas(JSON.stringify({ areas: [{ center: [-0.5, 39.6], radius: 800 }] })).areas[0]!.id, areas[1]!.id, 'the same id each read');
   assert.deepEqual(areas[2]!.hide, []);
   assert.equal(problems.length, 3);
   assert.match(problems.join(' '), /radius/);
-  assert.match(problems.join(' '), /another area has the id "home"/);
+  assert.match(problems.join(' '), /another area or group has the id "home"/);
   assert.match(problems.join(' '), /"hide"/);
 });
 
 test('areas.json is written one area per line, keeping comments, and reads back the same', () => {
   const list = [area('a1', [-0.4701234567, 39.7], 1500.4, { name: 'Ridge' }), area('b2', [1, 2], 300, { on: false, hide: ['road', 'track'] })];
-  const text = areasText(list, JSON.stringify({ '//': 'mine', areas: [] }));
+  const text = areasText(list, [], JSON.stringify({ '//': 'mine', areas: [] }));
   assert.match(text, /"\/\/": "mine"/);
   assert.equal(text.split('\n').filter((l) => l.includes('"center"')).length, 2);
   const back = parseAreas(text);
@@ -52,6 +52,56 @@ test('areas.json is written one area per line, keeping comments, and reads back 
   assert.deepEqual(parseAreas(areasText([])).areas, []);
   // It is part of the config.
   assert.equal(parseConfig({ 'areas.json': text }).config.areas.length, 2);
+});
+
+test('groups are read and written with their circles, and empty or unknown ones are dropped', () => {
+  const { areas, groups, problems } = parseAreas(JSON.stringify({
+    groups: [{ id: 'g-hills', name: ' Hills ', joined: true }, { id: 'g-hills', name: 'Again' }, { id: 'Bad Id' }, { id: 'g-two', joined: 'yes' }],
+    areas: [
+      { id: 'a', center: [1, 1], radius: 100, group: 'g-hills' },
+      { id: 'b', center: [1.001, 1], radius: 100, group: 'g-hills' },
+      { id: 'c', center: [2, 2], radius: 100, group: 'g-none' },
+      { id: 'g-two', center: [3, 3], radius: 100 },
+    ],
+  }));
+  assert.deepEqual(groups, [{ id: 'g-hills', name: 'Hills', joined: true }, { id: 'g-two', name: 'Group', joined: false }]);
+  assert.deepEqual(areas.map((a) => a.group), ['g-hills', 'g-hills', null]);
+  assert.equal(problems.length, 5, problems.join('\n'));
+  assert.match(problems.join(' '), /another group has the id "g-hills"/);
+  assert.match(problems.join(' '), /"joined" should be true or false/);
+  assert.match(problems.join(' '), /"group" should be the id/);
+  assert.match(problems.join(' '), /another area or group has the id "g-two"/);
+
+  // Written back, the group with no circles is gone, and the rest reads the same.
+  const text = areasText(areas, groups);
+  assert.equal(text.split('\n').filter((l) => l.includes('"joined"')).length, 1);
+  const back = parseAreas(text);
+  assert.deepEqual(back.problems, []);
+  assert.deepEqual(back.groups, [groups[0]]);
+  assert.deepEqual(back.areas, areas);
+  assert.deepEqual(parseConfig({ 'areas.json': text }).config.groups, [groups[0]]);
+  // No groups, no "groups" key.
+  assert.doesNotMatch(areasText([area('x', C, 100)]), /groups/);
+  // Group ids can be asked for with a prefix, and never match an area's.
+  assert.match(newAreaId([area('x', C, 100)], Math.random, 'g-'), /^g-[a-z0-9]{6}$/);
+});
+
+test('the outline around overlapping circles leaves out where they overlap, and meets where they cross', () => {
+  const dist = (p: [number, number], c: [number, number]) => Math.hypot((p[0] - c[0]) * K, (p[1] - c[1]) * M_PER_DEG);
+  // Apart: each circle is a whole ring.
+  const apart = unionEdge([{ center: C, radius: 500 }, { center: P(2000), radius: 500 }]);
+  assert.equal(apart.length, 2);
+  assert.deepEqual(apart[0]![0], apart[0]!.at(-1));
+  // Overlapping: one arc each, ending exactly on the other circle.
+  const a = { center: C, radius: 500 }, b = { center: P(600), radius: 500 };
+  const both = unionEdge([a, b]);
+  assert.equal(both.length, 2);
+  for (const [line, other] of [[both[0]!, b], [both[1]!, a]] as const) {
+    for (const p of line.slice(1, -1)) assert.ok(dist(p, other.center) >= other.radius - 0.5, 'no part inside the other circle');
+    assert.ok(Math.abs(dist(line[0]!, other.center) - other.radius) < 0.5 && Math.abs(dist(line.at(-1)!, other.center) - other.radius) < 0.5, 'ends where the circles cross');
+  }
+  // A circle inside another adds no edge.
+  assert.equal(unionEdge([{ center: C, radius: 1000 }, { center: P(100), radius: 200 }]).length, 1);
 });
 
 test('new area ids are short and unused', () => {
@@ -136,6 +186,19 @@ test('areas download in parts, share tiles, and are ready without downloading ag
   areas.set([area('big', C, 2500), area('small', P(500), 800)]);
   assert.equal(areas.view()[1]!.state, 'ready');
   assert.equal(log.length, parts);
+  // A joined group counts roads in its circles once, however much they overlap.
+  areas.set([area('big', C, 2500), area('small', P(500), 800, { group: 'g-x' }), area('small2', P(-500), 800, { group: 'g-x' })], [{ id: 'g-x', name: 'X', joined: true }]);
+  const [g] = areas.groupView();
+  assert.equal(g!.state, 'ready');
+  assert.deepEqual(g!.members, ['small', 'small2']);
+  // Two 800 m circles 1000 m apart along the trail: 2600 m of it, not 3200.
+  assert.ok(Math.abs(g!.totals.trail! - 2600) < 5, JSON.stringify(g!.totals));
+  assert.ok(areas.roadsOf('g-x')!.roads.length > 0);
+  // Separate, it has no roads of its own.
+  areas.set([area('big', C, 2500), area('small', P(500), 800, { group: 'g-x' })], [{ id: 'g-x', name: 'X', joined: false }]);
+  assert.deepEqual(areas.groupView()[0]!.totals, {});
+  assert.equal(areas.roadsOf('g-x'), null);
+
   // A bigger one downloads only the ring around it.
   areas.set([area('big', C, 2500), area('small', P(500), 800), area('bigger', C, 3500)]);
   await until(() => areas.view()[2]!.state === 'ready');

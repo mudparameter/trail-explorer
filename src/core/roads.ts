@@ -228,6 +228,50 @@ export function clipToCircle(line: [number, number][], center: [number, number],
   return { lines: out, length };
 }
 
+/**
+ * The parts of a line inside any of the circles, with their length in metres.
+ * Overlaps count once, so circles joined into one area never count a road twice.
+ */
+export function clipToCircles(line: [number, number][], circles: { center: [number, number]; radius: number }[]): { lines: [number, number][][]; length: number } {
+  if (circles.length === 1) return clipToCircle(line, circles[0]!.center, circles[0]!.radius);
+  const pr = projector(circles[0]!.center);
+  const ps = line.map(pr.to);
+  const cs = circles.map((c) => ({ at: pr.to(c.center), r: c.radius }));
+  const inside = (p: [number, number]) => cs.some((c) => (p[0] - c.at[0]) ** 2 + (p[1] - c.at[1]) ** 2 <= c.r * c.r);
+  const out: [number, number][][] = [];
+  let length = 0;
+  let cur: [number, number][] | null = null;
+  let last: [number, number] | null = null;
+  const add = (p: [number, number]) => {
+    if (last && Math.abs(last[0] - p[0]) < 1e-6 && Math.abs(last[1] - p[1]) < 1e-6) return;
+    if (last) length += Math.hypot(p[0] - last[0], p[1] - last[1]);
+    cur!.push(pr.from(p[0], p[1]));
+    last = p;
+  };
+  const end = () => {
+    if (cur && cur.length >= 2) out.push(cur);
+    cur = null;
+    last = null;
+  };
+  for (let i = 1; i < ps.length; i++) {
+    const a = ps[i - 1]!, b = ps[i]!;
+    const at = (t: number): [number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    // Cut the segment wherever it crosses any circle, and keep the pieces whose middle is inside one.
+    const ts = [0, ...cs.flatMap((c) => crossings([a[0] - c.at[0], a[1] - c.at[1]], [b[0] - c.at[0], b[1] - c.at[1]], c.r)), 1].sort((x, y) => x - y);
+    for (let j = 1; j < ts.length; j++) {
+      const t0 = ts[j - 1]!, t1 = ts[j]!;
+      if (t1 - t0 < 1e-12) continue;
+      if (inside(at((t0 + t1) / 2))) {
+        if (!cur) cur = [];
+        add(at(t0));
+        add(at(t1));
+      } else end();
+    }
+  }
+  end();
+  return { lines: out, length };
+}
+
 function difficulty(t: Record<string, string>): string | null {
   const mtb = t['mtb:scale'];
   if (mtb && /^[0-6][+-]?$/.test(mtb)) return `MTB S${mtb}`;
@@ -241,12 +285,17 @@ const top = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1])[0]?.[
 
 /** The roads and trails inside a circle, from ways, longest first within each kind. */
 export function roadsIn(ways: OsmWay[], center: [number, number], radius: number): Road[] {
+  return roadsInCircles(ways, [{ center, radius }]);
+}
+
+/** The roads and trails inside any of the circles, as one area. */
+export function roadsInCircles(ways: OsmWay[], circles: { center: [number, number]; radius: number }[]): Road[] {
   const groups = new Map<string, Road & { surfaces: Map<string, number>; levels: Map<string, number> }>();
   for (const way of ways) {
     const t = way.tags;
     const kind = kindOf(t);
     if (!kind) continue;
-    const clipped = clipToCircle(way.coords, center, radius);
+    const clipped = clipToCircles(way.coords, circles);
     if (!clipped.lines.length || clipped.length < 1) continue;
     const name = (t.name ?? t.ref ?? '').trim() || null;
     const key = `${kind}:${name?.toLowerCase() ?? ''}`;

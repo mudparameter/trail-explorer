@@ -29,6 +29,10 @@ export interface Edge {
   oneway: 0 | 1 | -1;
   /** Share of the edge you have ridden, 0 to 1. */
   ridden: number;
+  /** How many of your rides went along it, where ridden. 0 when not ridden or not known. */
+  passes?: number;
+  /** Steepest descent in %, going a→b and going b→a. Left out, or NaN, where elevation is unknown. */
+  down?: [number, number];
 }
 
 export interface Network {
@@ -68,7 +72,7 @@ function onewayOf(t: Record<string, string>): 0 | 1 | -1 {
  * circles. Ways are split where they meet, so every junction is a node.
  * `ridden(lon, lat, bearing)` says whether you have ridden there, if known.
  */
-export function buildNetwork(ways: OsmWay[], circles: Circle[], ridden?: (lon: number, lat: number, bearing: number) => boolean): Network {
+export function buildNetwork(ways: OsmWay[], circles: Circle[], ridden?: (lon: number, lat: number, bearing: number) => boolean, passes?: (lon: number, lat: number, bearing: number) => number): Network {
   // Runs of consecutive nodes inside the circles.
   const runs: { way: OsmWay; kind: RoadKind; ids: number[]; pts: [number, number][] }[] = [];
   for (const way of ways) {
@@ -121,7 +125,7 @@ export function buildNetwork(ways: OsmWay[], circles: Circle[], ridden?: (lon: n
       if (len > 0) {
         edges.push({
           ...base, a: nodeOf(r.ids[start]!, pts[0]!), b: nodeOf(r.ids[i]!, pts[pts.length - 1]!),
-          coords: pts.flat(), len, ridden: ridden ? riddenShare(pts, len, ridden) : 0,
+          coords: pts.flat(), len, ...(passes ? passShare(pts, len, passes) : { ridden: ridden ? riddenShare(pts, len, ridden) : 0 }),
         });
       }
       start = i;
@@ -138,6 +142,19 @@ function riddenShare(pts: [number, number][], len: number, ridden: (lon: number,
     if (ridden(lon, lat, bearing)) hit++;
   });
   return n ? hit / n : 0;
+}
+
+/** Like riddenShare, and how many rides went along it: the middle count of the points ridden. */
+function passShare(pts: [number, number][], len: number, passes: (lon: number, lat: number, bearing: number) => number): { ridden: number; passes: number } {
+  const counts: number[] = [];
+  let n = 0;
+  walk(pts, Math.max(SAMPLE, len / 200), (lon, lat, bearing) => {
+    n++;
+    const c = passes(lon, lat, bearing);
+    if (c) counts.push(c);
+  });
+  counts.sort((a, b) => a - b);
+  return { ridden: n ? counts.length / n : 0, passes: counts.length ? counts[Math.floor(counts.length / 2)]! : 0 };
 }
 
 /** Calls `fn` every `step` metres along a line, with the bearing there in radians. */
@@ -162,6 +179,8 @@ export class RideIndex {
   private cells = new Map<number, number[]>();
   /** x0, y0, x1, y1 per segment, in local metres. */
   private segs: number[] = [];
+  /** Which ride each segment is from. */
+  private rideOf: number[] = [];
   private lat0: number;
   private k: number;
   private near: number;
@@ -171,13 +190,14 @@ export class RideIndex {
     this.lat0 = (bounds[1] + bounds[3]) / 2;
     this.k = Math.cos((this.lat0 * Math.PI) / 180) * M_PER_DEG;
     const [w, s, e, n] = bounds;
-    for (const line of lines) {
+    for (const [ride, line] of lines.entries()) {
       for (let i = 2; i + 1 < line.length; i += 2) {
         const ax = line[i - 2]!, ay = line[i - 1]!, bx = line[i]!, by = line[i + 1]!;
         if (Math.max(ax, bx) < w || Math.min(ax, bx) > e || Math.max(ay, by) < s || Math.min(ay, by) > n) continue;
         const id = this.segs.length / 4;
         const [x0, y0] = this.xy(ax, ay), [x1, y1] = this.xy(bx, by);
         this.segs.push(x0, y0, x1, y1);
+        this.rideOf.push(ride);
         for (let cx = this.cell(Math.min(x0, x1)); cx <= this.cell(Math.max(x0, x1)); cx++) {
           for (let cy = this.cell(Math.min(y0, y1)); cy <= this.cell(Math.max(y0, y1)); cy++) {
             const key = cx * 1_000_003 + cy;
@@ -193,7 +213,13 @@ export class RideIndex {
   private cell = (v: number) => Math.floor(v / this.near);
 
   /** Has a ride passed here, going roughly along `bearing` (either way)? */
-  ridden = (lon: number, lat: number, bearing: number): boolean => {
+  ridden = (lon: number, lat: number, bearing: number): boolean => this.count(lon, lat, bearing, true) > 0;
+
+  /** How many different rides passed here, going roughly along `bearing` (either way). */
+  passes = (lon: number, lat: number, bearing: number): number => this.count(lon, lat, bearing, false);
+
+  private count(lon: number, lat: number, bearing: number, any: boolean): number {
+    const rides = new Set<number>();
     const [x, y] = this.xy(lon, lat);
     const cx = this.cell(x), cy = this.cell(y);
     const dx = Math.sin(bearing), dy = Math.cos(bearing);
@@ -207,12 +233,15 @@ export class RideIndex {
           const t = Math.max(0, Math.min(1, ((x - x0) * sx + (y - y0) * sy) / l2));
           if (Math.hypot(x - x0 - t * sx, y - y0 - t * sy) > this.near) continue;
           // Along, not across: within about 45° either way.
-          if (Math.abs((sx * dx + sy * dy) / Math.sqrt(l2)) >= 0.7) return true;
+          if (Math.abs((sx * dx + sy * dy) / Math.sqrt(l2)) >= 0.7) {
+            if (any) return 1;
+            rides.add(this.rideOf[id]!);
+          }
         }
       }
     }
-    return false;
-  };
+    return rides.size;
+  }
 }
 
 /** The network for the map: each edge with its kind, and whether it is ridden or restricted. */
@@ -222,7 +251,7 @@ export function networkGeoJson(net: Network): FeatureCollection {
     features: net.edges.map((e, i) => {
       const coordinates: [number, number][] = [];
       for (let k = 0; k < e.coords.length; k += 2) coordinates.push([+e.coords[k]!.toFixed(6), +e.coords[k + 1]!.toFixed(6)]);
-      return { type: 'Feature', id: i, properties: { kind: e.kind, ridden: e.ridden >= 0.5, restricted: e.restricted }, geometry: { type: 'LineString', coordinates } };
+      return { type: 'Feature', id: i, properties: { kind: e.kind, ridden: e.ridden >= 0.5, passes: e.ridden >= 0.5 ? Math.max(1, e.passes ?? 1) : 0, restricted: e.restricted }, geometry: { type: 'LineString', coordinates } };
     }),
   };
 }

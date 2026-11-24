@@ -109,13 +109,32 @@ export function Help() {
         haven't ridden yet. The Roads and trails layer under Layers sets their opacity and line width for every circle. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
         needs the internet and sends each circle's position to an OpenStreetMap data server.
       </p>
+      <h2>Group circles that cover one place</h2>
+      <p>
+        One place often takes several circles to cover. Open a circle with ▸ and choose Group, then New group, to start one, and pick
+        that group for the other circles. In a group's ▸, Draw a circle in this group adds circles straight to it. Turn on Join into one
+        area to show the group as a single area, with one outline around all its circles and one list of roads and trails that counts
+        overlaps once. Leave it off to keep each circle its own area, listed under the group. The group's checkbox shows or hides all
+        its circles. Ungroup keeps the circles; deleting a group asks whether to delete its circles too.
+      </p>
+      <p>
+        The circles' outline is a solid black line unless you change it. Set its colour, thickness and style (solid, dashed or dotted)
+        in Customize, under Roads and trails circles.
+      </p>
       <h2>Plan a route</h2>
       <p>
         Draw circles first. Then choose Route planner under Roads and trails. It opens a separate mode, with a blue bar on top, in
-        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance, climbing
-        and how much new trail you want, and pick from three to five routes. Each shows its difficulty and why, distance, climbing and
+        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance, climbing,
+        the steepest climb and descent you want to ride (optional), a difficulty, and how much new trail you want, and pick from three to five routes. Each shows its difficulty and why, distance, climbing and
         descent in metric and imperial, steep parts and an elevation profile. Save the ones you like. Saved routes are under Routes,
         in a table you can sort by clicking a column; there you can rename, view, download as .gpx or delete them.
+      </p>
+      <p>
+        Not keen on any of the routes? Generate new routes asks for a different set. ✨ Magic routes in step 3 uses only the
+        distance and difficulty, with a tolerance either side of the distance (5 km unless you change it), and picks the
+        steepness, how technical the paths are, and the climbing to suit that difficulty. Paths you&apos;ve ridden, under the map key,
+        highlights them, darkens them, colours them like your heatmap by times ridden, or shows them like any other path. Include my
+        favourite trails, in step 3, takes in the paths you have ridden most in those areas, riding along a stretch of them.
       </p>
       <p>
         Routes are worked out on your computer from the downloaded OpenStreetMap paths, the same way every time. They stay inside the

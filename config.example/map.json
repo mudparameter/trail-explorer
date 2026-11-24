@@ -4,5 +4,6 @@
   "minZoom": 0,
   "maxZoom": 19,
   "background": "#eeeeee",
-  "overpass": ["https://overpass-api.de/api/interpreter"]
+  "overpass": ["https://overpass-api.de/api/interpreter"],
+  "circles": { "color": "#000000", "width": 2, "style": "solid" }
 }

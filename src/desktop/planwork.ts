@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FeatureCollection } from 'geojson';
 import { buildNetwork, coverage, networkGeoJson, RideIndex, type Circle, type Network } from '../core/network.ts';
-import { Planner, type Planned, type PlanRequest } from '../core/planner.ts';
-import { describe, elevated, statsOfLine, type PlannedRoute } from '../core/route.ts';
+import { favoriteEdges, MAGIC, overlap, Planner, type MagicRequest, type Planned, type PlanRequest } from '../core/planner.ts';
+import { describe, elevated, statsOfLine, steepestDescents, type Difficulty, type PlannedRoute } from '../core/route.ts';
 import type { OsmWay } from '../core/roads.ts';
 import { decodeTerrarium, Elevation, TERRAIN_ZOOM } from '../core/terrain.ts';
 import { unpackTrack } from '../core/track.ts';
@@ -51,12 +51,23 @@ function elevation(dir: string) {
 export function network(job: NetworkJob): NetworkResult {
   const lines = job.tracks.flatMap((t) => unpackTrack(t));
   const index = new RideIndex(lines, job.bounds);
-  const net = buildNetwork(job.ways, job.circles, index.ridden);
+  const net = buildNetwork(job.ways, job.circles, index.ridden, index.passes);
+  // How steep each path is going down either way, so a limit on descents can leave it out.
+  const ele = elevation(job.terrainDir);
+  const at = (lon: number, lat: number) => ele.at(lon, lat);
+  for (const e of net.edges) {
+    const line: [number, number][] = [];
+    for (let k = 0; k < e.coords.length; k += 2) line.push([e.coords[k]!, e.coords[k + 1]!]);
+    e.down = steepestDescents(line, at);
+  }
   current = { key: job.key, net, terrainDir: job.terrainDir };
   return { geojson: networkGeoJson(net), ...coverage(net) };
 }
 
-export function routes({ key, request }: { key: string; request: PlanRequest }): PlannedRoute[] {
+const routeId = (p: Planned) => createHash('sha256').update(JSON.stringify(p.steps)).digest('hex').replace(/[^a-z0-9]/g, '').slice(0, 12);
+const LEVELS: Difficulty[] = ['Easy', 'Moderate', 'Hard', 'Very hard'];
+
+function ready(key: string) {
   if (!current || current.key !== key) throw new Error('The areas need preparing again. Go back to step 1.');
   const ele = elevation(current.terrainDir);
   const at = (lon: number, lat: number) => ele.at(lon, lat);
@@ -68,9 +79,94 @@ export function routes({ key, request }: { key: string; request: PlanRequest }):
     }
     return c;
   };
-  const planned = new Planner(current.net, request).plan(5, climbOf);
-  return planned.map((p) => {
-    const id = createHash('sha256').update(JSON.stringify(p.steps)).digest('hex').replace(/[^a-z0-9]/g, '').slice(0, 12);
-    return describe(p, at, request.finish === null, id);
-  });
+  return { net: current.net, at, climbOf };
+}
+
+/**
+ * Routes for a request. `seen` are routes already shown, left out so a new set is
+ * new. With a `difficulty`, routes rated that way come first.
+ */
+export function routes({ key, request, seen = [], difficulty = null }: { key: string; request: PlanRequest; seen?: string[]; difficulty?: Difficulty | null }): PlannedRoute[] {
+  const { at, climbOf } = ready(key);
+  const fresh = (rs: PlannedRoute[]) => {
+    const out = rs.filter((r) => !seen.includes(r.id));
+    if (rs.length && !out.length) throw new Error('No other routes from there. Try changing the ride, or another start.');
+    if (!difficulty) return out;
+    const want = LEVELS.indexOf(difficulty) + 1;
+    // Stable: closest difficulty first, otherwise in the planner's order.
+    return out.map((r, i) => ({ r, i })).sort((a, b) => Math.abs(a.r.rating.level - want) - Math.abs(b.r.rating.level - want) || a.i - b.i).map((x) => x.r);
+  };
+  return fresh(plain(key, request, seen.length ? 10 : undefined, at, climbOf)).slice(0, 5);
+}
+
+function plain(key: string, request: PlanRequest, count: number | undefined, at: (lon: number, lat: number) => number, climbOf: (p: Planned) => number): PlannedRoute[] {
+  const { net } = ready(key);
+  const maxDown = request.maxDown ?? null, maxUp = request.maxUp ?? null;
+  const limited = maxDown !== null || maxUp !== null;
+  // With a limit, ask for spares: a route can still be too steep where two paths meet.
+  const planned = new Planner(net, request).plan(count ?? (limited ? 8 : 5), climbOf);
+  const out = planned.map((p) => describe(p, at, request.finish === null, routeId(p)));
+  if (!limited) return out;
+  const ok = out.filter((r) => (maxDown === null || r.stats.maxDown <= maxDown) && (maxUp === null || r.stats.maxUp <= maxUp));
+  if (planned.length && !ok.length) {
+    const what = [maxUp !== null && `climbs to ${maxUp}%`, maxDown !== null && `descents to ${maxDown}%`].filter(Boolean).join(' and ');
+    throw new Error(`No route from there keeps ${what} or less. Try a higher limit, more kinds of path, or another start.`);
+  }
+  return count ? ok : ok.slice(0, 5);
+}
+
+/**
+ * The magic planner: routes near a distance (within a tolerance) and of a
+ * difficulty, with everything else chosen to suit that difficulty. It tries
+ * several distances and mixes of new trail, keeps routes that are near enough,
+ * and picks the ones closest to the difficulty, each different from the rest.
+ */
+export function magic({ key, request, seen = [] }: { key: string; request: MagicRequest; seen?: string[] }): PlannedRoute[] {
+  const { net, at, climbOf } = ready(key);
+  const want = LEVELS.indexOf(request.difficulty) + 1;
+  const prof = MAGIC[request.difficulty];
+  const { distance: d, tolerance: tol } = request;
+  const found = new Map<string, { p: Planned; r: PlannedRoute }>();
+  for (const dist of [d, d + tol / 2, d - tol / 2].filter((x) => x >= 500)) {
+    for (const newTrail of ['some', 'lots', 'little'] as const) {
+      const req: PlanRequest = {
+        start: request.start, finish: request.finish, distance: dist, climb: Math.round((prof.climbPerKm * dist) / 1000), newTrail,
+        kinds: ['trail', 'track', 'cycleway', 'road'], allowRestricted: false,
+        maxUp: prof.maxUp, maxDown: prof.maxDown, maxLevel: prof.maxLevel, variant: request.variant ?? 0, favorites: request.favorites === true,
+      };
+      let planned: Planned[];
+      try {
+        planned = new Planner(net, req).plan(8, climbOf);
+      } catch {
+        continue;
+      }
+      for (const p of planned) {
+        const id = routeId(p);
+        if (!found.has(id) && !seen.includes(id)) found.set(id, { p, r: describe(p, at, request.finish === null, id) });
+      }
+    }
+  }
+  const all = [...found.values()];
+  if (!all.length) throw new Error(seen.length ? 'No other routes from there. Try another distance or difficulty, or another start.' : 'No routes could be made from there. Try another start, or a bigger area.');
+  // Near enough in distance first; then the closest difficulty and climbing to suit it,
+  // and with favourites asked for, routes with about a quarter on them (or all there are).
+  const favLength = request.favorites ? [...favoriteEdges(net)].reduce((n, i) => n + net.edges[i]!.len, 0) : 0;
+  const score = ({ r }: { r: PlannedRoute }) => {
+    const off = Math.abs(r.stats.distance - d);
+    const perKm = r.stats.gain / Math.max(1, r.stats.distance / 1000);
+    const favWant = Math.min(r.stats.distance / 4, favLength);
+    const fav = favLength ? 2 * Math.max(0, 1 - (r.favorite ?? 0) / Math.max(favWant, 1)) : 0;
+    return (off <= tol ? 0 : 10 + off / Math.max(tol, 1)) + 3 * Math.abs(r.rating.level - want) + Math.abs(perKm - prof.climbPerKm) / prof.climbPerKm + (0.3 * off) / Math.max(tol, 1) + fav;
+  };
+  const ranked = all.map((x) => ({ ...x, s: score(x) })).sort((a, b) => a.s - b.s || (a.r.id < b.r.id ? -1 : 1));
+  const out: typeof ranked = [];
+  for (const limit of [0.5, 0.75, 0.9, 1.01]) {
+    for (const x of ranked) {
+      if (out.length >= 5) break;
+      if (out.includes(x) || out.some((y) => overlap(net.edges, x.p, y.p) > limit)) continue;
+      out.push(x);
+    }
+    if (out.length >= Math.min(3, ranked.length)) break;
+  }
+  return out.map((x) => x.r);
 }

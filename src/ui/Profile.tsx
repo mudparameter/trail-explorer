@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { STEEP, type RouteStats } from '../core/route.ts';
 import { metres } from '../core/track.ts';
 
-const W = 640, H = 170, L = 46, R = 50, T = 10, B = 26;
+/** Height, and the margins for the axis labels, in pixels. The width is the panel's. */
+const H = 170, L = 46, R = 50, T = 10, B = 26;
 const fmt = (x: number, d = 0) => x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /** Round steps for an axis: 1, 2 or 5 × a power of ten, about `n` of them. */
@@ -22,6 +23,18 @@ function ticks(lo: number, hi: number, n: number): number[] {
  */
 export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: number | null): void }) {
   const [at, setAt] = useState<number | null>(null);
+  // Drawn at the panel's own width, one unit per pixel, so it fills the panel and
+  // the line under the mouse is the place it reports. Scaling a fixed drawing to
+  // fit left it narrower than the panel, and off from the mouse.
+  const box = useRef<HTMLElement>(null);
+  const [W, setW] = useState(640);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(300, Math.round(e!.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const p = stats.profile;
   const view = useMemo(() => {
     if (p.length < 2 || stats.minEle === null) return null;
@@ -32,8 +45,8 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
     const y = (e: number) => T + (1 - (e - lo) / (hi - lo)) * (H - T - B);
     const line = p.map(([d, e], i) => `${i ? 'L' : 'M'}${x(d).toFixed(1)},${y(e).toFixed(1)}`).join('');
     return { dist, lo, hi, x, y, line, area: `${line}L${x(dist)},${H - B}L${x(0)},${H - B}Z` };
-  }, [p, stats.minEle]);
-  if (!view) return <p className="small">No elevation data for this route.</p>;
+  }, [p, stats.minEle, W]);
+  if (!view) return <figure className="profile" ref={box}><p className="small">No elevation data for this route.</p></figure>;
   const { dist, lo, hi, x, y } = view;
   const eleAt = (d: number) => {
     const i = Math.max(1, p.findIndex((q) => q[0] >= d));
@@ -46,7 +59,7 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
   };
   const move = (e: React.MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const px = ((e.clientX - r.left) / r.width) * W;
+    const px = ((e.clientX - r.left) / (r.width || 1)) * W;
     const d = Math.max(0, Math.min(dist, ((px - L) / (W - L - R)) * dist));
     setAt(d);
     onHover?.(d);
@@ -55,13 +68,15 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
     setAt(null);
     onHover?.(null);
   };
-  const kmTicks = ticks(0, dist / 1000, 6);
-  const miTicks = ticks(0, dist / 1609.344, 6);
+  // About one label per 100 pixels, so a wide panel gets more of them.
+  const n = Math.max(3, Math.round((W - L - R) / 100));
+  const kmTicks = ticks(0, dist / 1000, n);
+  const miTicks = ticks(0, dist / 1609.344, n);
   const mTicks = ticks(lo, hi, 4);
   const ftTicks = ticks(lo * 3.28084, hi * 3.28084, 4);
   return (
-    <figure className="profile">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Elevation profile" onMouseMove={move} onMouseLeave={leave}>
+    <figure className="profile" ref={box}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Elevation profile" onMouseMove={move} onMouseLeave={leave}>
         {stats.steepUp.map((s, i) => <rect key={`u${i}`} x={x(s.from)} width={Math.max(1, x(s.to) - x(s.from))} y={T} height={H - T - B} className="steep-up" />)}
         {stats.steepDown.map((s, i) => <rect key={`d${i}`} x={x(s.from)} width={Math.max(1, x(s.to) - x(s.from))} y={T} height={H - T - B} className="steep-down" />)}
         <path d={view.area} className="ground" />

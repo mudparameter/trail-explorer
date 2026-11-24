@@ -1,12 +1,12 @@
 import type { FeatureCollection } from 'geojson';
-import type { PlanRequest } from './planner.ts';
-import type { PlannedRoute, RouteStats } from './route.ts';
+import type { MagicRequest, PlanRequest } from './planner.ts';
+import type { Difficulty, PlannedRoute, RouteStats } from './route.ts';
 import type { SavedRoute } from './routes.ts';
 import type { Activity } from './activities.ts';
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
 import type { Config, FILES, Problem } from './config.ts';
-import type { Area, AreaEdit } from './areas.ts';
+import type { Area, AreaEdit, AreaGroup, GroupEdit } from './areas.ts';
 import type { Road, RoadKind } from './roads.ts';
 import type { CircleEdit } from './zones.ts';
 
@@ -105,6 +105,27 @@ export interface AreaView extends Area {
   /** Metres of each kind inside the circle. */
   totals: Partial<Record<RoadKind, number>>;
 }
+/** A group of areas. Joined, it is one area, with its own state and roads; separate, just a heading. */
+export interface GroupView extends AreaGroup {
+  /** Its areas' ids, in list order. */
+  members: string[];
+  /** Every one of its areas is shown. */
+  on: boolean;
+  /** Kinds every one of its areas leaves off. */
+  hide: RoadKind[];
+  state: AreaView['state'];
+  error: string | null;
+  done: number;
+  total: number;
+  /** Joined groups only, like an area's: changes when its roads change. */
+  version: number;
+  /** Joined groups only: metres of each kind inside any of its circles, overlaps counted once. */
+  totals: Partial<Record<RoadKind, number>>;
+}
+export interface AreasState {
+  areas: AreaView[];
+  groups: GroupView[];
+}
 /** Getting chosen areas ready for route planning. */
 export interface PlanProgress {
   stage: 'roads' | 'elevation' | 'network';
@@ -128,6 +149,15 @@ export interface RouteDetail {
   route: SavedRoute;
   line: [number, number, number][];
   stats: RouteStats;
+}
+/** Asking for routes again. */
+export interface PlanMore {
+  /** 0 the first time; each new set uses the next. */
+  variant?: number;
+  /** Ids of routes already shown, left out of the new set. */
+  seen?: string[];
+  /** Routes rated this way come first. */
+  difficulty?: Difficulty | null;
 }
 export type ConfigFile = (typeof FILES)[number];
 export type Result<T = void> = { ok: true; value: T } | { ok: false; error: string };
@@ -164,22 +194,30 @@ export interface TrailApi {
   getSaved(): Promise<Saved>;
   saveView(view: View): Promise<void>;
   saveShowZones(on: boolean): Promise<void>;
-  getAreas(): Promise<AreaView[]>;
-  onAreas(fn: (a: AreaView[]) => void): () => void;
-  /** The roads and trails in an area. Empty until it is ready. */
+  getAreas(): Promise<AreasState>;
+  onAreas(fn: (a: AreasState) => void): () => void;
+  /** The roads and trails in an area, or in a joined group. Empty until it is ready. */
   getAreaRoads(id: string): Promise<Result<{ version: number; roads: Road[] }>>;
   /** Saves a new area and starts downloading its data. Returns its id. */
-  addArea(area: { center: [number, number]; radius: number; name?: string | null }): Promise<Result<string>>;
+  addArea(area: { center: [number, number]; radius: number; name?: string | null; group?: string | null }): Promise<Result<string>>;
   editArea(id: string, edit: AreaEdit): Promise<Result>;
   /** Removes an area. Data another area also uses is kept. */
   removeArea(id: string): Promise<Result>;
+  /** Tries an area's download again, or every area's in a group. */
   retryArea(id: string): Promise<Result>;
+  /** Makes a group of these areas, taking them out of any other. Returns its id. */
+  addGroup(name: string, areaIds: string[]): Promise<Result<string>>;
+  editGroup(id: string, edit: GroupEdit): Promise<Result>;
+  /** Removes a group. Its areas stay, on their own, unless `withAreas`. */
+  removeGroup(id: string, withAreas: boolean): Promise<Result>;
 
   /** Gets areas ready for route planning: their paths, which you have ridden, and elevation. */
   planPrepare(areaIds: string[]): Promise<Result<PlanNetwork>>;
   onPlanProgress(fn: (p: PlanProgress) => void): () => void;
   /** Three to five routes for a request, best first. */
-  planRoutes(key: string, request: PlanRequest): Promise<Result<PlannedRoute[]>>;
+  planRoutes(key: string, request: PlanRequest, more?: PlanMore): Promise<Result<PlannedRoute[]>>;
+  /** Routes near a distance and of a difficulty, with everything else chosen to suit it. */
+  planMagic(key: string, request: Omit<MagicRequest, 'variant'>, more?: PlanMore): Promise<Result<PlannedRoute[]>>;
   getRoutes(): Promise<SavedRoute[]>;
   getRoute(id: string): Promise<Result<RouteDetail>>;
   /** Saves one of the routes just planned. Returns it as saved. */

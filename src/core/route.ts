@@ -55,6 +55,8 @@ export interface PlannedRoute {
   /** Metres on trail you haven't ridden. */
   fresh: number;
   repeated: number;
+  /** Metres on your favourite trails, when they were asked for. */
+  favorite?: number;
   kinds: Partial<Record<RoadKind, number>>;
   /** mtb:scale (or sac_scale on the same 0–6 scale), where tagged. */
   level: number | null;
@@ -88,6 +90,35 @@ export function elevated(line: [number, number][], ele: (lon: number, lat: numbe
     +x.toFixed(6), +y.toFixed(6),
     Math.round(((e[Math.max(0, i - 1)]! + e[i]! + e[Math.min(e.length - 1, i + 1)]!) / 3) * 10) / 10,
   ]);
+}
+
+/** Edges shorter than this are too short to measure a grade on: the elevation data isn't that fine. */
+const MIN_GRADE_RUN = 20;
+
+/**
+ * The steepest descent along a line, going each way, in %, measured like a
+ * route's: over WINDOW metres (or the whole line, if shorter). NaN where elevation is unknown.
+ */
+export function steepestDescents(line: [number, number][], ele: (lon: number, lat: number) => number): [number, number] {
+  const pts = elevated(line, ele);
+  const e = pts.map((p) => p[2]);
+  if (!e.length || !e.every(Number.isFinite)) return [NaN, NaN];
+  const d = [0];
+  for (let i = 1; i < pts.length; i++) d.push(d[i - 1]! + metres(pts[i - 1]![0], pts[i - 1]![1], pts[i]![0], pts[i]![1]));
+  const total = d[d.length - 1]!;
+  if (total < MIN_GRADE_RUN) return [0, 0];
+  const w = Math.min(WINDOW, total);
+  let fwd = 0, back = 0;
+  let j = 0;
+  for (let i = 0; i < d.length; i++) {
+    while (j < d.length - 1 && d[j]! - d[i]! < w) j++;
+    const run = d[j]! - d[i]!;
+    if (run < w * 0.8) break;
+    const g = ((e[j]! - e[i]!) / run) * 100;
+    fwd = Math.max(fwd, -g);
+    back = Math.max(back, g);
+  }
+  return [Math.round(fwd * 10) / 10, Math.round(back * 10) / 10];
 }
 
 /** Climbing, descending, steep parts and a profile from samples. */
@@ -188,7 +219,7 @@ export function describe(p: Planned, ele: (lon: number, lat: number) => number, 
   const name = `${p.heading[0]!.toUpperCase()}${p.heading.slice(1)} ${loop ? 'loop' : 'route'}, ${(stats.distance / 1000).toFixed(1)} km`;
   return {
     id, name, loop, line,
-    stats, rating, fresh: Math.round(p.fresh), repeated: Math.round(p.repeated), kinds: p.kinds, level: p.level, restricted: p.restricted,
+    stats, rating, fresh: Math.round(p.fresh), repeated: Math.round(p.repeated), ...(p.favorite ? { favorite: Math.round(p.favorite) } : {}), kinds: p.kinds, level: p.level, restricted: p.restricted,
   };
 }
 

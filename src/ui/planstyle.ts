@@ -6,12 +6,14 @@ import type { MapInfo } from '../core/api.ts';
 import type { Config } from '../core/config.ts';
 import type { Circle } from '../core/network.ts';
 import { KINDS } from '../core/roads.ts';
-import { circleRing } from '../core/zones.ts';
-import { AREA_COLOR, buildStyle, type Bundled } from './mapstyle.ts';
+import { buildStyle, circleFeatures, circleLineLayout, circleLinePaint, type Bundled } from './mapstyle.ts';
 
 /** One colour per route, in the order they are listed. */
 export const ROUTE_COLORS = ['#e11d48', '#7c3aed', '#0891b2', '#ca8a04', '#16a34a'];
 export const RIDDEN_COLOR = '#2563eb';
+export const RIDDEN_DARK = '#27272a';
+/** Paths you have ridden: highlighted in blue, darkened, coloured like the heatmap by times ridden, or drawn like any other path. */
+export type RiddenLook = 'show' | 'dark' | 'heatmap' | 'hide';
 export const START_COLOR = '#16a34a';
 export const FINISH_COLOR = '#dc2626';
 /** Where the mouse is on the elevation profile. */
@@ -28,12 +30,26 @@ export interface PlanStyleInput {
   maps: Record<string, MapInfo>;
   bundled: Bundled;
   baseMap: boolean;
+  /** How paths you have ridden look. Normally highlighted. */
+  ridden?: RiddenLook;
   circles: Circle[];
   network: FeatureCollection | null;
   routes: PlanRoute[];
   selected: string | null;
   start: [number, number] | null;
   finish: [number, number] | null;
+}
+
+/** Ridden paths in the heatmap's colours by times ridden, with its outline, most ridden on top. */
+function heatLayers(config: Config, width: (w: number) => any, round: any, faded: number): LayerSpecification[] {
+  const { bands, outline } = config.heatmap;
+  const color: any = bands.length > 1 ? ['step', ['get', 'passes'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;
+  const filter: any = ['all', ['get', 'ridden'], ['!', ['get', 'restricted']]];
+  const layout = { ...round, 'line-sort-key': ['get', 'passes'] };
+  return [
+    { id: 'net-ridden-outline', type: 'line', source: 'net', filter, layout, paint: { 'line-color': outline, 'line-width': width(4.5), 'line-opacity': 0.9 * faded } },
+    { id: 'net-ridden', type: 'line', source: 'net', filter, layout, paint: { 'line-color': color, 'line-width': width(3), 'line-opacity': faded } },
+  ];
 }
 
 export function planStyle(p: PlanStyleInput): StyleSpecification {
@@ -53,13 +69,14 @@ export function planStyle(p: PlanStyleInput): StyleSpecification {
   /** Wider for the selected route. Zoom must be the outer expression. */
   const routeWidth = (on: number, off: number): any => ['interpolate', ['linear'], ['zoom'], ...[[10, 0.6], [14, 1], [18, 2]].flatMap(([z, k]) => [z, ['case', ['get', 'on'], on * k!, off * k!]])];
 
-  sources.areas = {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: p.circles.map((c) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circleRing(c.center, c.radius, 120)] } })) },
-  };
+  // Routes can go anywhere in the chosen circles, so they are drawn as one area.
+  const shapes = circleFeatures([{ id: 'plan', circles: p.circles }]);
+  const line = p.config.map.circles;
+  sources.areas = { type: 'geojson', data: shapes.fill };
+  sources['areas-edge'] = { type: 'geojson', data: shapes.edge };
   layers.push(
-    { id: 'area-fill', type: 'fill', source: 'areas', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': 0.04 } },
-    { id: 'area-line', type: 'line', source: 'areas', paint: { 'line-color': AREA_COLOR, 'line-width': 2, 'line-dasharray': [3, 2] } },
+    { id: 'area-fill', type: 'fill', source: 'areas', paint: { 'fill-color': line.color, 'fill-opacity': 0.04 } },
+    { id: 'area-line', type: 'line', source: 'areas-edge', layout: circleLineLayout(line), paint: circleLinePaint(line) },
   );
   if (p.network) {
     sources.net = { type: 'geojson', data: p.network, tolerance: 0.3 };
@@ -68,8 +85,14 @@ export function planStyle(p: PlanStyleInput): StyleSpecification {
     layers.push(
       // Restricted: thin and grey. Ridden: solid blue. Not ridden yet: dashed, coloured by kind.
       { id: 'net-restricted', type: 'line', source: 'net', filter: ['get', 'restricted'], layout: round, paint: { 'line-color': '#9ca3af', 'line-width': width(1.5), 'line-dasharray': [1, 2], 'line-opacity': faded } },
-      { id: 'net-ridden', type: 'line', source: 'net', filter: ['all', ['get', 'ridden'], ['!', ['get', 'restricted']]], layout: round, paint: { 'line-color': RIDDEN_COLOR, 'line-width': width(3), 'line-opacity': 0.8 * faded } },
-      { id: NETWORK_LINES, type: 'line', source: 'net', filter: ['all', ['!', ['get', 'ridden']], ['!', ['get', 'restricted']]], layout: { 'line-join': 'round' }, paint: { 'line-color': kind, 'line-width': width(2.5), 'line-dasharray': [2, 1.5], 'line-opacity': faded } },
+      ...(p.ridden === 'hide' ? [] : p.ridden === 'heatmap' ? heatLayers(p.config, width, round, faded) : [{
+        id: 'net-ridden', type: 'line', source: 'net', filter: ['all', ['get', 'ridden'], ['!', ['get', 'restricted']]], layout: round,
+        paint: p.ridden === 'dark'
+          ? { 'line-color': RIDDEN_DARK, 'line-width': width(2), 'line-opacity': 0.75 * faded }
+          : { 'line-color': RIDDEN_COLOR, 'line-width': width(3), 'line-opacity': 0.8 * faded },
+      } as LayerSpecification]),
+      // With ridden paths hidden, they are drawn like any other path: only the ridden look goes.
+      { id: NETWORK_LINES, type: 'line', source: 'net', filter: p.ridden === 'hide' ? ['!', ['get', 'restricted']] : ['all', ['!', ['get', 'ridden']], ['!', ['get', 'restricted']]], layout: { 'line-join': 'round' }, paint: { 'line-color': kind, 'line-width': width(2.5), 'line-dasharray': [2, 1.5], 'line-opacity': faded } },
     );
   }
   const shown = p.selected ? [...p.routes.filter((r) => r.id !== p.selected), ...p.routes.filter((r) => r.id === p.selected)] : p.routes;

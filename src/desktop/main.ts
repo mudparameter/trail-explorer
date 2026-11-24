@@ -2,16 +2,16 @@ import { constants, mkdirSync, watch } from 'node:fs';
 import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
-import type { AreaView, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
-import type { PlanRequest } from '../core/planner.ts';
+import type { AreasState, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
+import { MAGIC, type MagicRequest, type PlanRequest } from '../core/planner.ts';
 import { circleBounds, KINDS, type OsmWay } from '../core/roads.ts';
-import { gpxLine, routeGpx, statsOfLine, type PlannedRoute } from '../core/route.ts';
+import { gpxLine, routeGpx, statsOfLine, type Difficulty, type PlannedRoute } from '../core/route.ts';
 import { isRouteId, newRouteId, parseRoutes, routeFile, ROUTES_FILE, routesText, type SavedRoute } from '../core/routes.ts';
 import { TERRAIN_URL, TERRAIN_ZOOM, terrainTiles } from '../core/terrain.ts';
 import type { NetworkJob, NetworkResult } from './planwork.ts';
 import { fetchTerrain } from './terrain.ts';
 import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, newMapIndex, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
-import { AREAS_FILE, areasText, checkAreaEdit, newAreaId, type Area, type AreaEdit } from '../core/areas.ts';
+import { AREAS_FILE, areasText, checkAreaEdit, checkGroupEdit, newAreaId, type Area, type AreaEdit, type AreaGroup, type GroupEdit } from '../core/areas.ts';
 import { Areas } from './areas.ts';
 import { OsmStore } from './osm.ts';
 import { addCircle, editCircle, removeZone, type CircleEdit } from '../core/zones.ts';
@@ -220,10 +220,14 @@ function start() {
   }
   const osm = new OsmStore(join(data, 'osm.db'));
   let areasTimer: NodeJS.Timeout | null = null;
+  const areasState = (): AreasState => {
+    const list = areas.view();
+    return { areas: list, groups: areas.groupView(list) };
+  };
   const areas = new Areas(osm, overpass, () => {
     areasTimer ??= setTimeout(() => {
       areasTimer = null;
-      if (win && !win.isDestroyed()) win.webContents.send('trail:areas', areas.view());
+      if (win && !win.isDestroyed()) win.webContents.send('trail:areas', areasState());
     }, 100);
   });
   let mapInfos: Record<string, MapInfo> = {};
@@ -272,7 +276,7 @@ function start() {
     problems = found;
     mapInfos = infos;
     configLoaded = true;
-    areas.set(config.areas);
+    areas.set(config.areas, config.groups);
     if (heatKey() !== store.get<string>('heatmapKey')) void buildHeatmap();
     // New web maps need a new security policy, which needs a fresh page.
     if (win && !win.isDestroyed() && mapOrigins(config.layers).join(' ') !== before) win.webContents.reload();
@@ -590,32 +594,36 @@ function start() {
   // --- roads and trails ----------------------------------------------------------
   // Areas are listed in areas.json. Their road data is shared in osm.db, so it is
   // downloaded once, whichever areas use it.
-  handle('getAreas', (): AreaView[] => areas.view());
+  handle('getAreas', (): AreasState => areasState());
   handle('getAreaRoads', (id: unknown) => result(() => {
     const c = typeof id === 'string' ? areas.roadsOf(id) : null;
     return c ? { version: c.version, roads: c.roads } : { version: 0, roads: [] };
   }));
   // One change to areas.json at a time, each from the file as it is now.
   let areaWrites: Promise<unknown> = Promise.resolve();
-  const editAreas = (fn: (list: Area[]) => Area[]) => {
+  const editAreas = (fn: (list: Area[], groups: AreaGroup[]) => Area[] | { areas: Area[]; groups: AreaGroup[] }) => {
     const next = areaWrites.then(async () => {
       await loading;
       if (problems.some((p) => p.file === AREAS_FILE)) throw new Error(`${AREAS_FILE} has a problem, so the app will not change it. Fix it in the Customize screen's list first.`);
-      const list = fn(config.areas);
-      await cfgDir.write(AREAS_FILE, areasText(list, await cfgDir.read(AREAS_FILE)));
+      const r = fn(config.areas, config.groups);
+      const out = Array.isArray(r) ? { areas: r, groups: config.groups } : r;
+      await cfgDir.write(AREAS_FILE, areasText(out.areas, out.groups, await cfgDir.read(AREAS_FILE)));
       await reload();
     });
     areaWrites = next.catch(() => {});
     return next;
   };
-  handle('addArea', (a: { center?: unknown; radius?: unknown; name?: unknown }) => result(async () => {
-    const edit = { center: a?.center, radius: a?.radius, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null } as AreaEdit;
+  handle('addArea', (a: { center?: unknown; radius?: unknown; name?: unknown; group?: unknown }) => result(async () => {
+    const edit = { center: a?.center, radius: a?.radius, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null, group: a?.group ?? null } as AreaEdit;
     if (edit.center === undefined || edit.radius === undefined) throw new Error('An area needs a place and a size.');
     checkAreaEdit(edit);
     let id = '';
-    await editAreas((list) => {
-      id = newAreaId(list);
-      return [...list, { id, name: edit.name ?? null, center: edit.center!, radius: Math.round(edit.radius!), on: true, hide: [] }];
+    await editAreas((list, groups) => {
+      if (edit.group && !groups.some((g) => g.id === edit.group)) throw new Error('That group is no longer in areas.json.');
+      id = newAreaId([...list, ...groups]);
+      // A circle added to a group takes on what the group shows and hides.
+      const like = list.find((x) => x.group && x.group === edit.group);
+      return [...list, { id, name: edit.name ?? null, center: edit.center!, radius: Math.round(edit.radius!), on: like?.on ?? true, hide: like ? [...like.hide] : [], group: edit.group ?? null }];
     });
     return id;
   }));
@@ -628,8 +636,10 @@ function start() {
     if (edit.hide !== undefined) clean.hide = [...new Set(edit.hide)];
     if (edit.center !== undefined) clean.center = edit.center;
     if (edit.radius !== undefined) clean.radius = Math.round(edit.radius);
-    await editAreas((list) => {
+    if (edit.group !== undefined) clean.group = edit.group;
+    await editAreas((list, groups) => {
       if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
+      if (clean.group && !groups.some((g) => g.id === clean.group)) throw new Error('That group is no longer in areas.json.');
       return list.map((a) => (a.id === id ? { ...a, ...clean } : a));
     });
   }));
@@ -643,6 +653,39 @@ function start() {
   }));
   handle('retryArea', (id: unknown) => result(() => {
     if (typeof id === 'string') areas.retry(id);
+  }));
+  handle('addGroup', (name: unknown, ids: unknown) => result(async () => {
+    checkGroupEdit({ name: name as string });
+    if (!Array.isArray(ids) || !ids.length || ids.some((x) => typeof x !== 'string')) throw new Error('Choose at least one area for the group.');
+    let id = '';
+    await editAreas((list, groups) => {
+      if (!ids.every((x) => list.some((a) => a.id === x))) throw new Error('One of those areas is no longer in areas.json.');
+      id = newAreaId([...list, ...groups], Math.random, 'g-');
+      return { areas: list.map((a) => (ids.includes(a.id) ? { ...a, group: id } : a)), groups: [...groups, { id, name: (name as string).trim(), joined: false }] };
+    });
+    return id;
+  }));
+  handle('editGroup', (id: unknown, e: unknown) => result(async () => {
+    const edit = (e ?? {}) as GroupEdit;
+    checkGroupEdit(edit);
+    const clean: GroupEdit = {};
+    if (edit.name !== undefined) clean.name = edit.name.trim();
+    if (edit.joined !== undefined) clean.joined = edit.joined;
+    await editAreas((list, groups) => {
+      if (!groups.some((g) => g.id === id)) throw new Error('That group is no longer in areas.json.');
+      return { areas: list, groups: groups.map((g) => (g.id === id ? { ...g, ...clean } : g)) };
+    });
+  }));
+  handle('removeGroup', (id: unknown, withAreas: unknown) => result(async () => {
+    await editAreas((list, groups) => {
+      if (!groups.some((g) => g.id === id)) throw new Error('That group is no longer in areas.json.');
+      const left = withAreas === true ? list.filter((a) => a.group !== id) : list.map((a) => (a.group === id ? { ...a, group: null } : a));
+      return { areas: left, groups: groups.filter((g) => g.id !== id) };
+    });
+    if (withAreas === true) {
+      const n = areas.prune();
+      if (n) console.log(`Dropped ${n} roads no area uses.`);
+    }
   }));
 
   // --- route planning ----------------------------------------------------------
@@ -680,7 +723,15 @@ function start() {
     } satisfies NetworkJob);
     return { key, ...out, bounds, missingElevation };
   }));
-  handle('planRoutes', (key: unknown, r: any) => result(async () => {
+  /** Asking again: which variant, the routes already shown, and the difficulty wished for. */
+  const planMore = (o: unknown) => {
+    const x = (o ?? {}) as { variant?: unknown; seen?: unknown; difficulty?: unknown };
+    const variant = Number.isInteger(x.variant) && (x.variant as number) >= 0 && (x.variant as number) < 1e6 ? (x.variant as number) : 0;
+    const seen = Array.isArray(x.seen) ? x.seen.filter((s): s is string => typeof s === 'string').slice(0, 500) : [];
+    const difficulty = typeof x.difficulty === 'string' && x.difficulty in MAGIC ? (x.difficulty as Difficulty) : null;
+    return { variant, seen, difficulty };
+  };
+  handle('planRoutes', (key: unknown, r: any, o: unknown) => result(async () => {
     const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
     if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
     if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
@@ -688,9 +739,26 @@ function start() {
     if (!['little', 'some', 'lots'].includes(r.newTrail)) throw new Error('Choose how much new trail.');
     const kinds = Array.isArray(r.kinds) ? r.kinds.filter((k: unknown) => KINDS.some((x) => x.kind === k)) : [];
     if (!kinds.length) throw new Error('Choose at least one kind of path.');
-    const request: PlanRequest = { start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true };
-    planned = await runJob<PlannedRoute[]>('planRoutes', { key, request });
+    if (r.maxDown != null && !(typeof r.maxDown === 'number' && r.maxDown >= 1 && r.maxDown <= 100)) throw new Error('Choose a steepest descent from 1 to 100%, or leave it empty.');
+    if (r.maxUp != null && !(typeof r.maxUp === 'number' && r.maxUp >= 1 && r.maxUp <= 100)) throw new Error('Choose a steepest climb from 1 to 100%, or leave it empty.');
+    const more = planMore(o);
+    const request: PlanRequest = {
+      start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true,
+      maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true,
+    };
+    planned = await runJob<PlannedRoute[]>('planRoutes', { key, request, seen: more.seen, difficulty: more.difficulty });
     if (!planned.length) throw new Error('No routes could be made from there. Try a shorter distance, more kinds of path, or a start inside an area.');
+    return planned;
+  }));
+  handle('planMagic', (key: unknown, r: any, o: unknown) => result(async () => {
+    const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
+    if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
+    if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
+    if (!(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
+    if (!(r.difficulty in MAGIC)) throw new Error('Choose a difficulty for magic routes.');
+    const more = planMore(o);
+    const request: MagicRequest = { start: r.start, finish: r.finish, distance: r.distance, tolerance: r.tolerance, difficulty: r.difficulty, variant: more.variant, favorites: r.favorites === true };
+    planned = await runJob<PlannedRoute[]>('planMagic', { key, request, seen: more.seen });
     return planned;
   }));
 

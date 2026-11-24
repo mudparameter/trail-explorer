@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { AreaView, Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
+import type { AreaView, Bounds, ConfigState, GroupView, LayerState, Status, View } from '../core/api.ts';
 import { ACTIVITIES, type Activity } from '../core/activities.ts';
 import { APP_ZONES, bandLabels, layerState, MAX_WIDTH, MIN_WIDTH, type Config } from '../core/config.ts';
 import { MAX_RADIUS, MIN_RADIUS, type Zone } from '../core/zones.ts';
 import type { Placing, Screen } from './App.tsx';
 import { trail } from './api.ts';
-import { AreaList, type EditArea } from './Roads.tsx';
+import { AreaList, type EditArea, type EditGroup, type EditMembers } from './Roads.tsx';
 
 interface Props {
   status: Status;
@@ -25,12 +25,17 @@ interface Props {
   placing: Placing;
   setPlacing(p: Placing): void;
   drawing: boolean;
-  startDrawing(): void;
+  /** The group a circle being drawn goes in. */
+  drawGroup: string | null;
+  startDrawing(group?: string | null): void;
   /** Opens the route planner. */
   openPlanner(): void;
   areas: AreaView[];
+  groups: GroupView[];
   listArea(id: string): void;
   editArea: EditArea;
+  editGroup: EditGroup;
+  editMembers: EditMembers;
 }
 
 function ago(iso: string | null): string {
@@ -170,7 +175,8 @@ export function Sidebar(p: Props) {
       <Zones {...p} report={report} />
 
       <AreaList
-        areas={p.areas} edit={p.editArea} drawing={p.drawing} startDrawing={p.startDrawing} report={report} list={p.listArea}
+        areas={p.areas} groups={p.groups} edit={p.editArea} editGroup={p.editGroup} editMembers={p.editMembers}
+        drawing={p.drawing} drawGroup={p.drawGroup} startDrawing={p.startDrawing} report={report} list={p.listArea}
         go={(b) => { p.setScreen('map'); p.go(b); }}
       />
       <div className="planner-cta">

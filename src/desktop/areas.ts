@@ -2,9 +2,10 @@
 // area holds. Data is fetched by tile, a few tiles at a time, and saved as each
 // part arrives: a big area survives a restart, and areas that overlap never wait
 // for or download the same tile twice.
-import type { AreaView } from '../core/api.ts';
-import type { Area } from '../core/areas.ts';
-import { kindTotals, overpassQuery, parseOverpass, roadsIn, tilesFor, type Road } from '../core/roads.ts';
+import type { AreaView, GroupView } from '../core/api.ts';
+import type { Area, AreaGroup } from '../core/areas.ts';
+import { KINDS, kindTotals, overpassQuery, parseOverpass, roadsIn, roadsInCircles, tilesFor, type Road, type RoadKind } from '../core/roads.ts';
+import type { OsmWay } from '../core/roads.ts';
 import type { OsmStore } from './osm.ts';
 
 /** Tiles per download. Small enough that a busy server still answers. */
@@ -23,6 +24,7 @@ export class Areas {
   private fetch: (query: string) => Promise<unknown>;
   private changed: () => void;
   private areas: Area[] = [];
+  private groups: AreaGroup[] = [];
   /** Tiles each area touches, by area signature. */
   private tiles = new Map<string, number[]>();
   /** Tiles being downloaded now. */
@@ -48,19 +50,30 @@ export class Areas {
   }
   private missing = (a: Area) => this.tilesOf(a).filter((k) => !this.store.has(k));
 
-  /** The areas from the config. Starts downloading anything they need. */
-  set(areas: Area[]) {
+  private members = (g: string) => this.areas.filter((a) => a.group === g);
+  /** A joined group's circles, which change its roads when they change. */
+  private groupSig = (g: string) => this.members(g).map(this.sig).join(';');
+
+  /** The areas and groups from the config. Starts downloading anything they need. */
+  set(areas: Area[], groups: AreaGroup[] = []) {
     this.areas = areas;
+    this.groups = groups;
     const sigs = new Set(areas.map(this.sig));
     for (const s of this.tiles.keys()) if (!sigs.has(s)) this.tiles.delete(s);
-    for (const [id, c] of this.roads) if (!areas.some((a) => a.id === id && this.sig(a) === c.sig)) this.roads.delete(id);
+    for (const [id, c] of this.roads) {
+      const a = areas.find((x) => x.id === id);
+      const g = groups.find((x) => x.id === id && x.joined);
+      if (!(a && this.sig(a) === c.sig) && !(g && this.groupSig(g.id) === c.sig)) this.roads.delete(id);
+    }
     for (const id of this.failed.keys()) if (!areas.some((a) => a.id === id)) this.failed.delete(id);
     this.pump();
     this.changed();
   }
 
+  /** Tries an area again, or every area in a group. */
   retry(id: string) {
     this.failed.delete(id);
+    for (const a of this.members(id)) this.failed.delete(a.id);
     this.pump();
     this.changed();
   }
@@ -76,8 +89,21 @@ export class Areas {
     return this.store.prune(keep);
   }
 
-  /** The roads in an area, once all its data is here. */
+  /** The roads in an area or a joined group, once all its data is here. */
   roadsOf(id: string): Cached | null {
+    const g = this.groups.find((x) => x.id === id && x.joined);
+    if (g) {
+      const ms = this.members(g.id);
+      if (!ms.length || ms.some((m) => this.missing(m).length)) return null;
+      const sig = this.groupSig(g.id);
+      const c = this.roads.get(id);
+      if (c && c.sig === sig) return c;
+      const ways = new Map<number, OsmWay>();
+      for (const m of ms) for (const w of this.store.waysIn(m.center, m.radius)) ways.set(w.id, w);
+      const fresh = { sig, roads: roadsInCircles([...ways.values()], ms.map((m) => ({ center: m.center, radius: m.radius }))), version: ++this.version };
+      this.roads.set(id, fresh);
+      return fresh;
+    }
     const a = this.areas.find((x) => x.id === id);
     if (!a || this.missing(a).length) return null;
     const c = this.roads.get(id);
@@ -99,6 +125,22 @@ export class Areas {
       const err = this.failed.get(a.id);
       if (err) return { ...base, state: 'error', error: err };
       return { ...base, state: missing.some((k) => this.claimed.has(k)) ? 'downloading' : 'queued' };
+    });
+  }
+
+  groupView(views = this.view()): GroupView[] {
+    return this.groups.flatMap((g): GroupView[] => {
+      const ms = views.filter((a) => a.group === g.id);
+      if (!ms.length) return [];
+      const tiles = new Set(ms.flatMap((m) => this.tilesOf(m)));
+      const done = [...tiles].filter((k) => this.store.has(k)).length;
+      const hide = KINDS.map((k) => k.kind).filter((k: RoadKind) => ms.every((m) => m.hide.includes(k)));
+      const err = ms.find((m) => m.state === 'error');
+      const state: GroupView['state'] = err ? 'error' : ms.every((m) => m.state === 'ready') ? 'ready' : ms.some((m) => m.state === 'downloading') ? 'downloading' : 'queued';
+      const base = { ...g, members: ms.map((m) => m.id), on: ms.every((m) => m.on), hide, state, error: err?.error ?? null, done, total: tiles.size, version: 0, totals: {} };
+      if (!g.joined || state !== 'ready') return [base];
+      const c = this.roadsOf(g.id)!;
+      return [{ ...base, version: c.version, totals: kindTotals(c.roads) }];
     });
   }
 

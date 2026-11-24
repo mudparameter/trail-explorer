@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AreaView, Bounds, MapInfo, PlanNetwork, PlanProgress } from '../core/api.ts';
-import type { Config } from '../core/config.ts';
+import type { AreaView, Bounds, GroupView, MapInfo, PlanNetwork, PlanProgress } from '../core/api.ts';
+import { bandLabels, type Config } from '../core/config.ts';
 import { insideAny } from '../core/network.ts';
-import type { NewTrail, PlanRequest } from '../core/planner.ts';
+import type { Level, NewTrail, PlanRequest } from '../core/planner.ts';
 import { height, km, type PlannedRoute } from '../core/route.ts';
 import { distance, KINDS, type RoadKind } from '../core/roads.ts';
 import { trail } from './api.ts';
 import type { Bundled } from './mapstyle.ts';
 import { PlanMap } from './PlanMap.tsx';
-import { planStyle, ROUTE_COLORS, RIDDEN_COLOR, START_COLOR, FINISH_COLOR } from './planstyle.ts';
+import { planStyle, ROUTE_COLORS, RIDDEN_COLOR, RIDDEN_DARK, START_COLOR, FINISH_COLOR, type RiddenLook } from './planstyle.ts';
 import { pointAt, Profile } from './Profile.tsx';
 import { areaName } from './Roads.tsx';
 
@@ -19,13 +19,25 @@ const NEW_TRAIL: { id: NewTrail; label: string; note: string }[] = [
   { id: 'lots', label: 'Lots', note: 'mostly new, still joined up by known ones' },
 ];
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+const LEVELS: Level[] = ['Easy', 'Moderate', 'Hard', 'Very hard'];
+/** How paths you have ridden look on the planner's map. Remembered on this computer. */
+const RIDDEN_KEY = 'planner.ridden';
+function savedLook(): RiddenLook {
+  try {
+    const v = localStorage.getItem(RIDDEN_KEY);
+    return v === 'dark' || v === 'hide' || v === 'heatmap' ? v : 'show';
+  } catch {
+    return 'show';
+  }
+}
 
 /** The route planner: a separate mode, in steps, over its own map. */
-export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
+export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes }: {
   config: Config;
   maps: Record<string, MapInfo>;
   bundled: Bundled;
   areas: AreaView[];
+  groups: GroupView[];
   exit(): void;
   showRoutes(): void;
 }) {
@@ -33,7 +45,7 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
   const [chosen, setChosen] = useState<Set<string>>(() => new Set(areas.filter((a) => a.on && a.state === 'ready').map((a) => a.id)));
   const [net, setNet] = useState<PlanNetwork | null>(null);
   const [progress, setProgress] = useState<PlanProgress | null>(null);
-  const [busy, setBusy] = useState<'prepare' | 'plan' | null>(null);
+  const [busy, setBusy] = useState<'prepare' | 'plan' | 'magic' | 'again' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loop, setLoop] = useState(true);
   const [start, setStart] = useState<[number, number] | null>(null);
@@ -43,9 +55,17 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
   const [distUnit, setDistUnit] = useState<'km' | 'mi'>('km');
   const [climb, setClimb] = useState('');
   const [climbUnit, setClimbUnit] = useState<'m' | 'ft'>('m');
+  const [maxDown, setMaxDown] = useState('');
+  const [maxUp, setMaxUp] = useState('');
+  const [difficulty, setDifficulty] = useState<Level | null>(null);
+  const [tolerance, setTolerance] = useState('5');
+  const [ridden, setRidden] = useState<RiddenLook>(savedLook);
+  /** How the routes shown were asked for, so a new set can be asked for the same way. */
+  const [asked, setAsked] = useState<{ magic: boolean; variant: number; seen: string[] } | null>(null);
   const [newTrail, setNewTrail] = useState<NewTrail>('some');
   const [kinds, setKinds] = useState<RoadKind[]>(['trail', 'track', 'cycleway', 'road']);
   const [allowRestricted, setAllowRestricted] = useState(false);
+  const [favorites, setFavorites] = useState(false);
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [profile, setProfile] = useState(false);
@@ -64,8 +84,8 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
   const circles = useMemo(() => areas.filter((a) => chosen.has(a.id)).map((a) => ({ center: a.center, radius: a.radius })), [areas, chosen]);
   const sel = routes.find((r) => r.id === selected) ?? null;
   const style = useMemo(
-    () => planStyle({ config, maps, bundled, baseMap, circles, network: net?.geojson ?? null, routes, selected, start, finish: loop ? null : finish }),
-    [config, maps, bundled, baseMap, circles, net, routes, selected, start, finish, loop],
+    () => planStyle({ config, maps, bundled, baseMap, ridden, circles, network: net?.geojson ?? null, routes, selected, start, finish: loop ? null : finish }),
+    [config, maps, bundled, baseMap, ridden, circles, net, routes, selected, start, finish, loop],
   );
 
   const prepare = async () => {
@@ -103,25 +123,45 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
       if (step === 2) setStep(3);
     }
   };
-  const request = (): PlanRequest | string => {
+  /** Where and how far: all the magic planner uses. */
+  const place = (): { start: [number, number]; finish: [number, number] | null; distance: number } | string => {
     const d = Number(dist) * (distUnit === 'mi' ? 1609.344 : 1000);
     if (!start) return 'Place a start on the map first.';
     if (!loop && !finish) return 'Place a finish on the map, or choose a loop.';
     if (!(d >= 500 && d <= 300_000)) return 'Choose a distance from 0.5 to 300 km (0.3 to 186 mi).';
+    return { start, finish: loop ? null : finish, distance: Math.round(d) };
+  };
+  const request = (): PlanRequest | string => {
+    const p = place();
+    if (typeof p === 'string') return p;
+    const d = p.distance;
     const c = climb.trim() === '' ? null : Number(climb) / (climbUnit === 'ft' ? 3.28084 : 1);
     if (c !== null && !(c >= 0 && c <= 10_000)) return 'Climbing should be a number, or empty.';
+    const md = maxDown.trim() === '' ? null : Number(maxDown);
+    if (md !== null && !(md >= 1 && md <= 100)) return 'Steepest descent should be a number from 1 to 100%, or empty.';
+    const mu = maxUp.trim() === '' ? null : Number(maxUp);
+    if (mu !== null && !(mu >= 1 && mu <= 100)) return 'Steepest climb should be a number from 1 to 100%, or empty.';
     if (!kinds.length) return 'Choose at least one kind of path.';
-    return { start, finish: loop ? null : finish, distance: Math.round(d), climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted };
+    return { ...p, climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted, maxDown: md, maxUp: mu, favorites };
   };
-  const plan = async () => {
-    const req = request();
+  /** Plans routes, or magic ones. `again` asks for a new set, leaving out the ones shown so far. */
+  const plan = async (magic: boolean, again = false) => {
+    // Magic needs only where and how far; the rest of the form doesn't count.
+    const req = magic ? place() : request();
     if (typeof req === 'string') return setError(req);
     if (!net) return;
-    setBusy('plan');
+    const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
+    if (magic && !difficulty) return setError('Choose a difficulty for magic routes.');
+    if (magic && !(tol >= 0 && tol <= 100_000)) return setError('Choose how far off the distance may be, from 0 to 100 km (62 mi).');
+    const more = again && asked ? { variant: asked.variant + 1, seen: [...asked.seen, ...routes.map((r) => r.id)] } : { variant: 0, seen: [] };
+    setBusy(magic ? 'magic' : again ? 'again' : 'plan');
     setError(null);
-    const r = await trail.planRoutes(net.key, req);
+    const r = magic
+      ? await trail.planMagic(net.key, { start: req.start, finish: req.finish, distance: req.distance, tolerance: Math.round(tol), difficulty: difficulty!, favorites }, more)
+      : await trail.planRoutes(net.key, req as PlanRequest, { ...more, difficulty });
     setBusy(null);
     if (!r.ok) return setError(r.error);
+    setAsked({ magic, ...more });
     setRoutes(r.value);
     setSelected(r.value[0]?.id ?? null);
     setStep(4);
@@ -157,15 +197,36 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
                 <p className="small">Choose the circles to plan in. Routes stay inside them.</p>
                 {areas.length === 0 && <p className="small">Draw circles on the main map first, under Roads and trails.</p>}
                 <ul className="choose">
-                  {areas.map((a) => (
-                    <li key={a.id}>
-                      <label>
-                        <input type="checkbox" disabled={a.state !== 'ready'} checked={chosen.has(a.id)}
-                          onChange={(e) => setChosen((s) => { const n = new Set(s); if (e.target.checked) n.add(a.id); else n.delete(a.id); return n; })} />
-                        {' '}{areaName(a)} <span className="small">{distance(a.radius)}{a.state !== 'ready' ? ' · still downloading' : ''}</span>
-                      </label>
-                    </li>
-                  ))}
+                  {areas.flatMap((a) => {
+                    const g = groups.find((x) => x.id === a.group);
+                    const choose = (ids: string[], on: boolean) => setChosen((s) => {
+                      const n = new Set(s);
+                      for (const id of ids) if (on) n.add(id); else n.delete(id);
+                      return n;
+                    });
+                    const row = (x: AreaView) => (
+                      <li key={x.id}>
+                        <label>
+                          <input type="checkbox" disabled={x.state !== 'ready'} checked={chosen.has(x.id)} onChange={(e) => choose([x.id], e.target.checked)} />
+                          {' '}{areaName(x)} <span className="small">{distance(x.radius)}{x.state !== 'ready' ? ' · still downloading' : ''}</span>
+                        </label>
+                      </li>
+                    );
+                    if (!g) return [row(a)];
+                    if (g.members[0] !== a.id) return [];
+                    // A group is chosen whole: its circles that are ready.
+                    const ms = areas.filter((m) => m.group === g.id);
+                    const ready = ms.filter((m) => m.state === 'ready').map((m) => m.id);
+                    return [
+                      <li key={g.id}>
+                        <label>
+                          <input type="checkbox" disabled={!ready.length} checked={ready.length > 0 && ready.every((id) => chosen.has(id))} onChange={(e) => choose(ready, e.target.checked)} />
+                          {' '}{g.name} <span className="small">{ms.length} circle{ms.length === 1 ? '' : 's'}{ready.length < ms.length ? ' · still downloading' : ''}</span>
+                        </label>
+                        {!g.joined && <ul className="choose nested">{ms.map(row)}</ul>}
+                      </li>,
+                    ];
+                  })}
                 </ul>
                 <button disabled={!chosen.size || busy !== null || !usable.length} onClick={() => void prepare()}>
                   {busy === 'prepare' ? 'Getting ready…' : 'Use these areas'}
@@ -201,9 +262,9 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
           </section>
 
           <section className="step">
-            {head(3, 'Your ride', `${dist} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
+            {head(3, 'Your ride', `${dist} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}${difficulty ? `, ${difficulty.toLowerCase()}` : ''}${maxUp ? `, up ≤ ${maxUp}%` : ''}${maxDown ? `, down ≤ ${maxDown}%` : ''}${favorites ? ', with favourites' : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
             {step === 3 && (
-              <form className="form ride" onSubmit={(e) => { e.preventDefault(); void plan(); }}>
+              <form className="form ride" onSubmit={(e) => { e.preventDefault(); void plan(false); }}>
                 <label>
                   Distance
                   <span className="row">
@@ -211,12 +272,36 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
                     <select value={distUnit} aria-label="Distance unit" onChange={(e) => setDistUnit(e.target.value as 'km' | 'mi')}><option value="km">km</option><option value="mi">mi</option></select>
                   </span>
                 </label>
+                <fieldset>
+                  <legend>Difficulty</legend>
+                  <label className="inline"><input type="radio" name="difficulty" checked={difficulty === null} onChange={() => setDifficulty(null)} /> Any</label>
+                  {LEVELS.map((l) => (
+                    <label key={l} className="inline"><input type="radio" name="difficulty" checked={difficulty === l} onChange={() => setDifficulty(l)} /> {l}</label>
+                  ))}
+                  <span className="small">Routes rated this way are listed first.</span>
+                </fieldset>
                 <label>
                   Climbing <span className="small">(optional)</span>
                   <span className="row">
                     <input type="number" min={0} step={50} value={climb} placeholder="Any" onChange={(e) => setClimb(e.target.value)} aria-label="Climbing" />
                     <select value={climbUnit} aria-label="Climbing unit" onChange={(e) => setClimbUnit(e.target.value as 'm' | 'ft')}><option value="m">m</option><option value="ft">ft</option></select>
                   </span>
+                </label>
+                <label>
+                  Steepest climb <span className="small">(optional)</span>
+                  <span className="row">
+                    <input type="number" min={1} max={100} step={1} value={maxUp} placeholder="Any" onChange={(e) => setMaxUp(e.target.value)} aria-label="Steepest climb" />
+                    <span>%</span>
+                  </span>
+                  <span className="small">Routes never climb anything steeper, measured over 50 m. Riding down it is fine.</span>
+                </label>
+                <label>
+                  Steepest descent <span className="small">(optional)</span>
+                  <span className="row">
+                    <input type="number" min={1} max={100} step={1} value={maxDown} placeholder="Any" onChange={(e) => setMaxDown(e.target.value)} aria-label="Steepest descent" />
+                    <span>%</span>
+                  </span>
+                  <span className="small">Routes never go down anything steeper, measured over 50 m. Climbing it is fine. 10% is steep for most riders, 20% very steep.</span>
                 </label>
                 <fieldset>
                   <legend>New trail</legend>
@@ -234,7 +319,30 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
                   ))}
                   <label className="inline"><input type="checkbox" checked={allowRestricted} onChange={(e) => setAllowRestricted(e.target.checked)} /> Allow paths marked private or no bikes</label>
                 </fieldset>
+                <label className="inline">
+                  <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} /> Include my favourite trails
+                  <span className="small"> The ones you have ridden most in these areas. Routes go out of their way for them, and ones with more come first.</span>
+                </label>
                 <button disabled={busy !== null}>{busy === 'plan' ? 'Planning…' : 'Plan routes'}</button>
+                <fieldset className="magic">
+                  <legend>Magic routes</legend>
+                  <p className="small">
+                    Only the distance, difficulty and favourite trails count: everything else above is set for you, with climbing,
+                    steepness and how technical the paths are to suit the difficulty. Paths marked private or no bikes are left out.
+                  </p>
+                  <label>
+                    Distance may be off by
+                    <span className="row">
+                      <span>±</span>
+                      <input type="number" min={0} step={1} value={tolerance} onChange={(e) => setTolerance(e.target.value)} aria-label="Magic distance tolerance" />
+                      <span>{distUnit}</span>
+                    </span>
+                  </label>
+                  <button type="button" disabled={busy !== null || !difficulty} onClick={() => void plan(true)}>
+                    {busy === 'magic' ? 'Working magic…' : '✨ Magic routes'}
+                  </button>
+                  {!difficulty && <span className="small">Choose a difficulty first.</span>}
+                </fieldset>
               </form>
             )}
           </section>
@@ -259,6 +367,20 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
                       select={() => setSelected(r.id)} showProfile={() => { setSelected(r.id); setProfile(true); }} />
                   ))}
                 </ol>
+                {asked?.magic && difficulty && (() => {
+                  const want = Number(dist) * (distUnit === 'mi' ? 1609.344 : 1000), tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
+                  const far = routes.filter((r) => Math.abs(r.stats.distance - want) > tol).length;
+                  const other = routes.filter((r) => r.rating.difficulty !== difficulty).length;
+                  return far || other ? (
+                    <p className="small warn" role="status">
+                      Closest that could be found: {[far && `${far} of these ${far === 1 ? 'is' : 'are'} more than ${tolerance} ${distUnit} off`, other && `${other} ${other === 1 ? 'isn’t' : 'aren’t'} rated ${difficulty.toLowerCase()}`].filter(Boolean).join(', and ')}.
+                    </p>
+                  ) : null;
+                })()}
+                <button className="primary" disabled={busy !== null} onClick={() => void plan(asked?.magic ?? false, true)}>
+                  {busy === 'again' || (busy === 'magic' && asked) ? 'Finding new routes…' : 'Generate new routes'}
+                </button>
+                <p className="small">A different set{asked?.magic ? ' of magic routes' : ''} from the same request, leaving out the ones shown so far.</p>
                 <div className="row">
                   <button onClick={() => setStep(3)}>Change the ride</button>
                   <button onClick={() => setStep(2)}>Move start or finish</button>
@@ -270,10 +392,33 @@ export function Planner({ config, maps, bundled, areas, exit, showRoutes }: {
           {error && <p className="error" role="alert">{error}</p>}
           <div className="plan-key small">
             <h2>Map key</h2>
-            <p><span className="swatch" style={{ background: RIDDEN_COLOR }} /> Ridden</p>
-            <p><span className="swatch dashed" /> Not ridden yet, by kind</p>
+            {(ridden === 'show' || ridden === 'dark') && <p><span className="swatch" style={{ background: ridden === 'dark' ? RIDDEN_DARK : RIDDEN_COLOR }} /> Ridden</p>}
+            {ridden === 'heatmap' && (
+              <>
+                <p>Ridden, by times ridden:</p>
+                <ul className="legend">
+                  {config.heatmap.bands.map((b, i) => <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{bandLabels(config.heatmap.bands)[i]}</li>)}
+                </ul>
+              </>
+            )}
+            <p><span className="swatch dashed" /> {ridden === 'hide' ? 'Paths, by kind' : 'Not ridden yet, by kind'}</p>
             <p><span className="swatch dotted" /> Private or no bikes</p>
             <label><input type="checkbox" checked={baseMap} onChange={(e) => setBaseMap(e.target.checked)} /> Show the base map</label>
+            <label>
+              Paths you&apos;ve ridden{' '}
+              <select value={ridden} aria-label="Paths you've ridden" onChange={(e) => {
+                const v = e.target.value as RiddenLook;
+                setRidden(v);
+                try {
+                  localStorage.setItem(RIDDEN_KEY, v);
+                } catch {}
+              }}>
+                <option value="show">Highlight</option>
+                <option value="dark">Darken</option>
+                <option value="heatmap">Heatmap</option>
+                <option value="hide">Hide</option>
+              </select>
+            </label>
             <p className="credit">Paths © OpenStreetMap contributors. Elevation: Mapzen Terrain Tiles (USGS, SRTM and others).</p>
           </div>
         </aside>
@@ -323,7 +468,9 @@ function RouteCard({ route: r, color, on, select, showProfile }: { route: Planne
         <dt>Distance</dt><dd>{km(s.distance)}</dd>
         <dt>Climbing</dt><dd>↑ {height(s.gain)}</dd>
         <dt>Descent</dt><dd>↓ {height(s.loss)}</dd>
+        <dt>Steepest</dt><dd>↑ {Math.round(s.maxUp)}% ↓ {Math.round(s.maxDown)}%</dd>
         <dt>New trail</dt><dd>{km(r.fresh)}, {pct(r.fresh / total)}</dd>
+        {r.favorite !== undefined && <><dt>Favourites</dt><dd>{km(r.favorite)}, {pct(r.favorite / total)}</dd></>}
       </dl>
       <p className="small">{mix}</p>
       <p className="small">Why {r.rating.difficulty.toLowerCase()}: {r.rating.reasons.join(', ')}.</p>

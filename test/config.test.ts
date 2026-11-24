@@ -158,3 +158,15 @@ test('config.example/README.md is the README the app writes', async () => {
   const { CONFIG_README } = await import('../src/core/config-readme.ts');
   assert.equal(readFileSync(join(import.meta.dirname, '..', 'config.example', 'README.md'), 'utf8'), CONFIG_README);
 });
+
+test('the circle outline is read from map.json, with problems reported', () => {
+  assert.deepEqual(parse({}).config.map.circles, { color: '#000000', width: 2, style: 'solid' });
+  const ok = parse({ 'map.json': { circles: { color: '#FF0000', width: 3.5, style: 'dotted' } } });
+  assert.deepEqual(ok.problems, []);
+  assert.deepEqual(ok.config.map.circles, { color: '#ff0000', width: 3.5, style: 'dotted' });
+  const bad = parse({ 'map.json': { circles: { color: 'red', width: 50, style: 'wavy', glow: true } } });
+  assert.deepEqual(bad.config.map.circles, { color: '#000000', width: 2, style: 'solid' });
+  assert.equal(bad.problems.length, 4);
+  assert.match(bad.problems.map((p) => p.message).join(' '), /"circles": "style" should be "solid", "dashed", "dotted"/);
+  assert.equal(parse({ 'map.json': { circles: 'black' } }).problems.length, 1);
+});

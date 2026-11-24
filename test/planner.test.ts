@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildNetwork, coverage, RideIndex, type Circle } from '../src/core/network.ts';
-import { Planner, type PlanRequest } from '../src/core/planner.ts';
-import { describe, elevated, gpxLine, km, height, rate, routeGpx, statsOfLine } from '../src/core/route.ts';
+import { buildNetwork, coverage, networkGeoJson, RideIndex, type Circle } from '../src/core/network.ts';
+import { favoriteEdges, Planner, type PlanRequest } from '../src/core/planner.ts';
+import { describe, elevated, gpxLine, km, height, rate, routeGpx, statsOfLine, steepestDescents } from '../src/core/route.ts';
 import type { OsmWay } from '../src/core/roads.ts';
 import { metres, M_PER_DEG } from '../src/core/track.ts';
 
@@ -161,4 +161,95 @@ test('saved routes are read and written one per line, and odd entries are left o
   assert.deepEqual(parseRoutes('not json'), []);
   assert.match(routesText([], JSON.stringify({ '//': 'mine' })), /"\/\/": "mine"/);
   assert.match(newRouteId(new Set()), /^[a-z0-9]{8}$/);
+});
+
+test('each path knows its steepest descent both ways, and a limit keeps routes off steeper ones going down', () => {
+  // A slope rising 25% to the north: 25 m per 100 m.
+  const ele = (lon: number, lat: number) => ((lat - C[1]) * M_PER_DEG) * 0.25 + 500;
+  const [south, north] = [P(0, 200), P(0, 0)];
+  // Going south from 200 m north is downhill at 25%; going north, it isn't downhill at all.
+  const d = steepestDescents([south, north], ele);
+  assert.ok(Math.abs(d[0] - 25) < 1 && d[1] < 0.5, JSON.stringify(d));
+  assert.deepEqual(steepestDescents([P(0, 0), P(10, 0)], ele), [0, 0], 'too short to measure');
+  assert.ok(steepestDescents([P(0, 0), P(100, 0)], () => NaN).every(Number.isNaN), 'unknown elevation');
+
+  const net = buildNetwork(grid(), [circle], new RideIndex(rides, [-1, 38, 1, 41]).ridden);
+  for (const e of net.edges) {
+    const line: [number, number][] = [];
+    for (let k = 0; k < e.coords.length; k += 2) line.push([e.coords[k]!, e.coords[k + 1]!]);
+    e.down = steepestDescents(line, ele);
+  }
+  // A loop has to come back down somewhere: with 10% allowed, it does so on the flat east-west rows,
+  // never down a north-south path.
+  const goesDownSouth = (line: [number, number][]) => line.some((p, i) => i > 0 && metres(p[0], p[1], p[0], line[i - 1]![1]) > 1 && p[1] < line[i - 1]![1]);
+  assert.ok(new Planner(net, req()).plan(5).some((r) => goesDownSouth(r.line)), 'without a limit, routes go down the slope');
+  // With a limit, the only way back south is closed, so a loop can't be made at all: nothing goes down it.
+  const limited = new Planner(net, req({ maxDown: 10 })).plan(5);
+  assert.ok(limited.every((r) => !goesDownSouth(r.line)));
+  // From a start to a finish further north, routes still work: climbing steep paths is fine.
+  const up = new Planner(net, req({ maxDown: 10, start: P(0, -1000), finish: P(0, 1000) })).plan(5);
+  assert.ok(up.length > 0);
+  assert.ok(up.every((r) => !goesDownSouth(r.line)));
+});
+
+test('a limit on climbs keeps routes off steeper paths going up, but lets them ride down', () => {
+  // The same 25% slope, rising to the north.
+  const ele = (lon: number, lat: number) => ((lat - C[1]) * M_PER_DEG) * 0.25 + 500;
+  const net = buildNetwork(grid(), [circle], new RideIndex(rides, [-1, 38, 1, 41]).ridden);
+  for (const e of net.edges) {
+    const line: [number, number][] = [];
+    for (let k = 0; k < e.coords.length; k += 2) line.push([e.coords[k]!, e.coords[k + 1]!]);
+    e.down = steepestDescents(line, ele);
+  }
+  const goesUpNorth = (line: [number, number][]) => line.some((p, i) => i > 0 && p[1] > line[i - 1]![1] + 1e-9);
+  assert.ok(new Planner(net, req()).plan(5).some((r) => goesUpNorth(r.line)), 'without a limit, routes climb the slope');
+  assert.ok(new Planner(net, req({ maxUp: 10 })).plan(5).every((r) => !goesUpNorth(r.line)));
+  // Down to a finish further south still works: descending steep paths is fine.
+  const down = new Planner(net, req({ maxUp: 10, start: P(0, 1000), finish: P(0, -1000) })).plan(5);
+  assert.ok(down.length > 0);
+  assert.ok(down.every((r) => !goesUpNorth(r.line)));
+  // Both limits together leave nothing on the slope, either way.
+  const both = new Planner(net, req({ maxUp: 10, maxDown: 10, start: P(0, 0), finish: P(1000, 0) })).plan(5);
+  assert.ok(both.length > 0);
+  assert.ok(both.every((r) => r.line.every((p, i) => i === 0 || Math.abs(p[1] - r.line[i - 1]![1]) < 1e-9)), 'east-west only');
+});
+
+test('another variant gives other routes, the same each time, and a level limit leaves out technical paths', () => {
+  const net = buildNetwork(grid(), [circle], new RideIndex(rides, [-1, 38, 1, 41]).ridden);
+  const base = new Planner(net, req()).plan(5).map((r) => JSON.stringify(r.steps));
+  const v1 = new Planner(net, req({ variant: 1 })).plan(5).map((r) => JSON.stringify(r.steps));
+  assert.ok(v1.length >= 3);
+  assert.ok(v1.some((r) => !base.includes(r)), 'a new set has new routes');
+  assert.deepEqual(new Planner(net, req({ variant: 1 })).plan(5).map((r) => JSON.stringify(r.steps)), v1, 'the same variant gives the same set');
+  // Variant 0 is the usual set.
+  assert.deepEqual(new Planner(net, req({ variant: 0 })).plan(5).map((r) => JSON.stringify(r.steps)), base);
+  // Mark the middle column S4: with S2 at most, no route uses it.
+  for (const e of net.edges) if (Math.abs(e.coords[0]! - C[0]) < 1e-9 && e.coords[0] === e.coords[e.coords.length - 2]) e.level = 4;
+  assert.ok(new Planner(net, req()).plan(5).some((r) => r.level === 4), 'without a limit, it is used');
+  assert.ok(new Planner(net, req({ maxLevel: 2 })).plan(5).every((r) => r.level === null || r.level <= 2));
+});
+
+test('paths know how many rides went along them, and the most ridden are favourites a route can take in', () => {
+  // Every row's western half once, and row 16 (1200 m north) five more times, all the way across.
+  const fav = Array.from({ length: 5 }, () => Float64Array.from([P(-2000, 1200), P(2000, 1200)].flat()));
+  const idx = new RideIndex([...rides, ...fav], [-1, 38, 1, 41]);
+  const net = buildNetwork(grid(), [circle], idx.ridden, idx.passes);
+  const row16 = net.edges.filter((e) => Math.abs(e.coords[1]! - P(0, 1200)[1]) < 1e-9 && e.coords[1] === e.coords[e.coords.length - 1]);
+  assert.ok(row16.length > 0);
+  assert.ok(row16.every((e) => e.passes! >= 5), 'row 16 ridden 5 or 6 times');
+  assert.ok(net.edges.filter((e) => e.ridden >= 0.5 && !row16.includes(e)).every((e) => e.passes === 1), 'the rest once');
+  // The map knows the counts too, for the heatmap colours.
+  assert.ok(networkGeoJson(net).features.some((f) => f.properties!.passes >= 5));
+  // Favourites are row 16.
+  const favs = favoriteEdges(net);
+  assert.ok(favs.size > 0 && [...favs].every((i) => row16.includes(net.edges[i]!)));
+  // Without favourites, loops from the middle needn't go there; with them, they do.
+  const plain = new Planner(net, req({ start: P(0, -400) })).plan(5);
+  const withFav = new Planner(net, req({ start: P(0, -400), favorites: true })).plan(5);
+  const on = (r: { favorite: number }) => r.favorite > 0;
+  assert.equal(plain.filter(on).length, 0, 'favourites are only counted when asked for');
+  assert.ok(withFav.length >= 3 && on(withFav[0]!), JSON.stringify(withFav.map((r) => r.favorite)));
+  // Along it, not just across: the best route rides a good stretch of it, about a quarter of its length.
+  assert.ok(withFav[0]!.favorite >= 1500, `${withFav[0]!.favorite} m of favourites`);
+  assert.ok(withFav.filter(on).length >= 3);
 });
