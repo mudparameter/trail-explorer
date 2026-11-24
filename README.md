@@ -22,7 +22,7 @@ There are no published downloads yet, so build it yourself (see [Development](#d
 | System | Command | Output |
 |---|---|---|
 | Linux (x64, Debian or Ubuntu) | `npm run package:linux` | `dist/<version>/trail-explorer_<version>_amd64.deb` |
-| macOS (Apple silicon) | `npm run package` | `dist/<version>/Trail Explorer-<version>-arm64.dmg` |
+| macOS (Apple silicon) | `npm run package:macos` | `dist/<version>/Trail Explorer-<version>-arm64.dmg` |
 
 On Linux, install the package with:
 

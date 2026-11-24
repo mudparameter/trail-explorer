@@ -10,7 +10,7 @@
     "build": "electron-vite build",
     "start": "node scripts/check-sandbox.mjs && electron-vite build && electron .",
     "typecheck": "tsc",
-    "package": "electron-vite build && electron-builder --mac --arm64 --publish never",
+    "package:macos": "electron-vite build && electron-builder --mac --arm64 --publish never",
     "package:linux": "electron-vite build && electron-builder --linux deb --x64 --publish never"
   },
   "devDependencies": {
