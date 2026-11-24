@@ -22,6 +22,8 @@ interface Props {
   setShowZones(on: boolean): void;
   placing: Placing;
   setPlacing(p: Placing): void;
+  drawing: boolean;
+  startDrawing(): void;
 }
 
 function ago(iso: string | null): string {
@@ -152,6 +154,10 @@ export function Sidebar(p: Props) {
       <p className="small">Or drop a map file on the window.</p>
 
       <Zones {...p} report={report} />
+
+      <h2>Roads and trails</h2>
+      <p className="small">Draw a circle on the map to list every road and trail in it, from OpenStreetMap.</p>
+      <button disabled={p.drawing} onClick={p.startDrawing}>{p.drawing ? 'Drawing…' : 'Draw a circle'}</button>
 
       <h2>Times ridden</h2>
       <ul className="legend">

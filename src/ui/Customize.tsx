@@ -157,6 +157,17 @@ function MapSection({ value, view, showOnMap }: { value: MapConfig; view: View |
             <Num label="Furthest in (zoom)" value={d.maxZoom} min={0} max={22} step={0.5} set={(x) => set({ ...d, maxZoom: x })} hint="19 is street level" />
           </div>
           <Colour label="Background" value={d.background} set={(x) => set({ ...d, background: x })} />
+          <label>
+            Road and trail data servers
+            <textarea
+              rows={2} value={d.overpass.join('\n')} spellCheck={false}
+              onChange={(e) => {
+                const lines = e.target.value.split('\n');
+                set({ ...d, overpass: lines.filter((l, i) => l.trim() || i === lines.length - 1).map((l) => l.trim()) });
+              }}
+            />
+            <span className="small">Overpass API addresses, one per line, tried in order when one is busy. The circle you search is sent to them.</span>
+          </label>
         </div>
       )}
     </Section>

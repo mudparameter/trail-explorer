@@ -4,6 +4,7 @@ import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
 import type { Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
 import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
+import { MAX_AREA, MIN_AREA, overpassQuery, readOverpass, type Road } from '../core/roads.ts';
 import { addCircle, editCircle, removeZone, type CircleEdit } from '../core/zones.ts';
 import { ConfigDir } from './configdir.ts';
 import { Busy, Garmin, GARMIN, KeyRejected, Offline } from './garmin.ts';
@@ -24,7 +25,7 @@ app.setName(appName);
 /** Address of the hot reload server under `npm run dev`, otherwise null. */
 const devServer = !app.isPackaged && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.ELECTRON_RENDERER_URL ?? '') ? process.env.ELECTRON_RENDERER_URL! : null;
 // Test hooks. They do nothing in the packaged app.
-const test = app.isPackaged ? {} : { data: process.env.TRAIL_TEST_DATA, garmin: process.env.TRAIL_TEST_GARMIN };
+const test = app.isPackaged ? {} : { data: process.env.TRAIL_TEST_DATA, garmin: process.env.TRAIL_TEST_GARMIN, overpass: process.env.TRAIL_TEST_OVERPASS };
 app.setPath('userData', test.data ?? join(app.getPath('appData'), appName));
 const garminBase = test.garmin?.startsWith('http://127.0.0.1:') ? test.garmin : GARMIN;
 
@@ -480,6 +481,75 @@ function start() {
   handle('saveShowZones', (on: unknown) => {
     if (typeof on === 'boolean') store.set('showZones', on);
   });
+
+  // Asks the config's Overpass servers for OpenStreetMap roads and trails. Public
+  // servers are often full, so busy answers are retried, then the next server is
+  // tried. One search at a time: a new one stops the last.
+  let roadSearch: AbortController | null = null;
+  const BUSY = [429, 502, 503, 504];
+  const WAITS = [0, 3000, 8000];
+  handle('findRoads', (center: unknown, radius: unknown) => result(async (): Promise<Road[]> => {
+    const c = center as [number, number];
+    if (!Array.isArray(c) || c.length !== 2 || !c.every(Number.isFinite) || Math.abs(c[0]) > 180 || Math.abs(c[1]) > 85) throw new Error('Pick a place on the map.');
+    if (typeof radius !== 'number' || !(radius >= MIN_AREA && radius <= MAX_AREA)) throw new Error(`The circle's radius should be ${MIN_AREA} m to ${MAX_AREA / 1000} km.`);
+    roadSearch?.abort();
+    const ctl = (roadSearch = new AbortController());
+    const stopped = () => new Error('Replaced by a newer search.');
+    const wait = (ms: number) => new Promise<void>((ok, no) => {
+      const t = setTimeout(ok, ms);
+      ctl.signal.addEventListener('abort', () => { clearTimeout(t); no(stopped()); }, { once: true });
+    });
+    const servers = test.overpass?.startsWith('http://127.0.0.1:') ? [test.overpass] : config.map.overpass;
+    const body = new URLSearchParams({ data: overpassQuery(c, radius) }).toString();
+    let why = 'busy';
+    for (const server of servers) {
+      for (const ms of WAITS) {
+        if (ms) await wait(ms);
+        let res: Response;
+        try {
+          res = await net.fetch(server, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            body,
+            signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(100_000)]),
+          });
+        } catch (e) {
+          if (ctl.signal.aborted) throw stopped();
+          why = (e as Error).name === 'TimeoutError' ? 'slow' : net.isOnline() ? 'unreachable' : 'offline';
+          if (why === 'offline') throw new Error('No internet. Finding roads and trails needs it.');
+          break; // try the next server
+        }
+        if (BUSY.includes(res.status)) {
+          why = 'busy';
+          await res.body?.cancel();
+          continue;
+        }
+        if (!res.ok) {
+          why = `error ${res.status}`;
+          break;
+        }
+        const text = await res.text();
+        if (text.length > 200 * 1024 ** 2) throw new Error('Too much data. Try a smaller circle.');
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          why = 'garbled';
+          break;
+        }
+        // Overpass reports running out of time or memory here, with a 200.
+        if (typeof json?.remark === 'string' && /error/i.test(json.remark)) throw new Error('The map data server could not finish. Try a smaller circle.');
+        return readOverpass(json, c, radius);
+      }
+    }
+    const host = servers.length === 1 ? new URL(servers[0]!).host : 'every map data server';
+    throw new Error(
+      why === 'busy' ? `${host} is busy. Try again in a minute, or add another server to "overpass" in map.json.`
+        : why === 'slow' ? `${host} took too long. Try a smaller circle, or again later.`
+        : why === 'unreachable' ? `Could not reach ${host}.`
+        : `${host} sent something unexpected (${why}).`,
+    );
+  }));
 
   // --- trail:// ---------------------------------------------------------------
   const ok = (body: BodyInit | null, type: string, extra: Record<string, string> = {}) =>

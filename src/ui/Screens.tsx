@@ -99,6 +99,14 @@ export function Help() {
       <p>The app keeps its own copy, so you can delete the download. Custom maps work without internet.</p>
       <h2>Hide places, such as around home</h2>
       <p>Under Excluded zones in the sidebar, choose Add zone and click the map. Rides are left out inside the circle. Edit sets its size; Move places it again. Zones are drawn in red on your map only.</p>
+      <h2>Find roads and trails in an area</h2>
+      <p>
+        Under Roads and trails in the sidebar, choose Draw a circle. Click the centre, move the mouse out, and click again. Every road,
+        track, cycleway and trail inside is listed with its length, surface and difficulty where OpenStreetMap has them. Click a name
+        to show it, or click a line on the map. This needs the internet, and sends the circle's position to an OpenStreetMap data server.
+      </p>
+      <h2>Hide your rides</h2>
+      <p>Untick My rides under Layers. Tick it again to bring them back.</p>
       <h2>Change colors, maps and where the map opens</h2>
       <p>Open Customize. Everything there is saved as plain files in the config folder, which you can also edit by hand or copy to another computer.</p>
       <h2>What the colors mean</h2>
@@ -106,7 +114,7 @@ export function Help() {
       <h2>Which rides are included</h2>
       <p>Cycling activities with GPS. Virtual and indoor rides are left out. Garmin appears to return about the last three years. Rides already in the app stay.</p>
       <h2>Map credits</h2>
-      <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps © OpenStreetMap contributors. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
+      <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps and road and trail searches © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
     </main>
   );
 }

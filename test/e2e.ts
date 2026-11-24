@@ -1,5 +1,6 @@
 // Drives the real app against a fake Garmin. Run: BBBIKE=folder SHOTS=folder node test/e2e.ts
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,8 +30,34 @@ const rides = plan.flatMap(([a, n]) => Array.from({ length: n }, () => ({ id: id
 rides.push({ id: 9999, type: 'virtual_ride', body: zipOf('a.fit', fit(path(climb, 10))) } as any);
 
 const f = await fakeGarmin({ rides, delay: 20 });
+
+// A fake Overpass server: busy the first time, then a trail, a track and a road through the centre asked for.
+const overpass = { queries: [] as string[], calls: 0 };
+const ops = createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', () => {
+    overpass.calls++;
+    if (overpass.calls === 1) {
+      res.writeHead(502).end('# 502 Gateway Timeout\nThis Overpass API server is currently at capacity.');
+      return;
+    }
+    const q = new URLSearchParams(body).get('data') ?? '';
+    overpass.queries.push(q);
+    const [, r, lat, lon] = q.match(/around:(\d+),([-\d.]+),([-\d.]+)/)!.map(Number) as number[];
+    const dLat = (r! * 2) / K, dLon = dLat / Math.cos((lat! * Math.PI) / 180);
+    const line = (a: number, b: number, c: number, d: number) => [{ lon: lon! + a * dLon, lat: lat! + b * dLat }, { lon: lon! + c * dLon, lat: lat! + d * dLat }];
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ elements: [
+      { type: 'way', tags: { highway: 'path', name: 'Ridge trail', 'mtb:scale': '2', surface: 'dirt' }, geometry: line(-1, 0, 1, 0) },
+      { type: 'way', tags: { highway: 'track', tracktype: 'grade3' }, geometry: line(0, -1, 0, 1) },
+      { type: 'way', tags: { highway: 'residential', name: 'High Street' }, geometry: line(-1, -0.1, 1, 0.1) },
+    ] }));
+  });
+});
+await new Promise<void>((ok) => ops.listen(0, '127.0.0.1', ok));
+const overpassUrl = `http://127.0.0.1:${(ops.address() as any).port}/api/interpreter`;
 const data = mkdtempSync(join(tmpdir(), 'te-e2e-'));
-const launch = () => _electron.launch({ executablePath: electronPath as unknown as string, args: ['.', '--use-mock-keychain'], env: { ...process.env, TRAIL_TEST_DATA: data, TRAIL_TEST_GARMIN: f.base } as any });
+const launch = () => _electron.launch({ executablePath: electronPath as unknown as string, args: ['.', '--use-mock-keychain'], env: { ...process.env, TRAIL_TEST_DATA: data, TRAIL_TEST_GARMIN: f.base, TRAIL_TEST_OVERPASS: overpassUrl } as any });
 let app = await launch();
 let w = await app.firstWindow();
 const logs: string[] = [];
@@ -166,6 +193,54 @@ await w.getByRole('button', { name: 'Map', exact: true }).click();
 await w.evaluate(() => (window as any).__map.jumpTo({ center: [0, 30], zoom: 1.5 }));
 await w.waitForTimeout(600);
 
+// Ride lines can be hidden.
+await w.getByRole('checkbox', { name: 'My rides' }).uncheck();
+await w.waitForFunction(() => !(window as any).__map.getLayer('heat'));
+await w.getByRole('checkbox', { name: 'My rides' }).check();
+await w.waitForFunction(() => !!(window as any).__map.getLayer('heat'));
+
+// Roads and trails: draw a circle, get a list from (fake) OpenStreetMap, pick one.
+await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 14 }), P(2000, 0));
+await w.waitForTimeout(500);
+await w.getByRole('button', { name: 'Draw a circle' }).click();
+await w.getByText('Click the centre of the area').waitFor();
+const mb = (await w.locator('.map').boundingBox())!;
+const cx = mb.x + mb.width / 2, cy = mb.y + mb.height / 2;
+await w.mouse.click(cx, cy);
+await w.mouse.move(cx + 60, cy, { steps: 4 });
+await w.mouse.move(cx + 120, cy, { steps: 4 });
+await w.getByText(/Radius \d+ m\. Click again/).waitFor();
+assert.ok(await w.evaluate(() => (window as any).__map.getStyle().sources.draw.data.type) !== undefined);
+await w.mouse.click(cx + 120, cy);
+await w.getByText('Searching OpenStreetMap').waitFor();
+await w.getByRole('button', { name: /Ridge trail/ }).waitFor({ timeout: 20000 });
+assert.equal(overpass.calls, 2, 'a busy server is asked again');
+assert.match(overpass.queries[0]!, /highway/);
+const radius = Number(overpass.queries[0]!.match(/around:(\d+)/)![1]);
+console.log('searched radius', radius);
+assert.ok(radius > 100 && radius < 600, 'radius from the drag');
+await w.getByText('MTB S2').waitFor();
+await w.getByRole('button', { name: /High Street/ }).waitFor();
+await w.getByRole('button', { name: /Unnamed/ }).waitFor();
+await w.waitForTimeout(600); await idle();
+await shot('15-roads');
+// Pick from the list, then from the map.
+await w.getByRole('button', { name: /Ridge trail/ }).click();
+await w.waitForFunction(() => !!(window as any).__map.getLayer('roads-selected'));
+assert.equal(await w.getByRole('button', { name: /Ridge trail/ }).getAttribute('aria-pressed'), 'true');
+await w.waitForTimeout(600); await idle();
+await shot('16-roads-selected');
+await w.getByRole('checkbox', { name: /Roads/ }).uncheck();
+await w.getByRole('button', { name: /High Street/ }).waitFor({ state: 'detached' });
+await w.getByRole('button', { name: 'Clear the search' }).click();
+await w.waitForFunction(() => !(window as any).__map.getLayer('roads-line'));
+// Escape stops drawing.
+await w.getByRole('button', { name: 'Draw a circle' }).click();
+await w.keyboard.press('Escape');
+await w.getByText('Click the centre of the area').waitFor({ state: 'detached' });
+await w.evaluate(() => (window as any).__map.jumpTo({ center: [0, 30], zoom: 1.5 }));
+await w.waitForTimeout(600);
+
 // The window has no access to Node, and the key is not in plain text on disk.
 assert.equal(await w.evaluate(() => typeof (globalThis as any).require + typeof (globalThis as any).process), 'undefinedundefined');
 assert.ok(!readFileSync(join(data, 'key.bin')).includes(KEY));
@@ -202,5 +277,6 @@ await w.getByRole('button', { name: 'Delete all rides' }).click();
 await w.getByText('0 rides are stored').waitFor();
 await app.close();
 f.close();
+ops.close();
 console.log('console problems:', [...new Set(logs)].slice(0, 15));
 console.log('E2E passed');

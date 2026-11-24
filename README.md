@@ -14,6 +14,7 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 - **Map layers.** The world map (OpenFreeMap), a world topo map (OpenTopoMap) and a Spain topo map (IGN). You can switch each one on or off, reorder them and set how see-through they are.
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.
 - **Excluded zones.** Hide places such as around home: click the map to place a circle, or draw any shape in a GeoJSON file. Rides are cut where they enter a zone.
+- **Roads and trails in an area.** Draw a circle on the map and get every road, track, cycleway and trail inside it, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). Needs the internet, and sends the circle's position to that server.
 - **Portable config.** Colors, start view, zoom limits, layers, offline maps and zones live in one folder of plain JSON files. Edit them in the app's Customize screen or by hand, and copy the folder to another computer.
 - **Private.** Rides stay on your computer. The Garmin key is encrypted with your system keychain and sent only to Garmin.
 
@@ -57,7 +58,7 @@ Everything about how the map looks lives in one config folder:
 ```
 config/
   README.md        what every setting means
-  map.json         start view, zoom limits, background color
+  map.json         start view, zoom limits, background color, road data servers
   heatmap.json     color bands, outline, how rides are matched
   layers.json      every layer, top first: your rides, web maps, offline map files
   maps/            offline .pmtiles / .mbtiles files
@@ -72,7 +73,7 @@ config/
 
 [`config.example/`](config.example) has a complete example with every file. Its [README](config.example/README.md) documents every setting.
 
-Reading, checking and applying the config (`src/core/config.ts`, `src/core/zones.ts`) has no Electron or Node code in it, so a web version can use the same files.
+Reading, checking and applying the config (`src/core/config.ts`, `src/core/zones.ts`, `src/core/roads.ts`) has no Electron or Node code in it, so a web version can use the same files.
 
 ## Development
 
@@ -122,7 +123,7 @@ test/          Unit tests, fake Garmin server, end-to-end tests
 
 ## Credits
 
-World map by [OpenFreeMap](https://openfreemap.org), © OpenMapTiles, data © OpenStreetMap contributors. Topo map by [OpenTopoMap](https://opentopomap.org) (CC BY-SA). Spain topo © [IGN](https://www.ign.es) (CC BY 4.0). Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki. See [`resources/CREDITS.txt`](resources/CREDITS.txt).
+World map by [OpenFreeMap](https://openfreemap.org), © OpenMapTiles, data © OpenStreetMap contributors. Topo map by [OpenTopoMap](https://opentopomap.org) (CC BY-SA). Spain topo © [IGN](https://www.ign.es) (CC BY 4.0). Road and trail searches: data © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki. See [`resources/CREDITS.txt`](resources/CREDITS.txt).
 
 ## License
 

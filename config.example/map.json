@@ -1,7 +1,8 @@
 {
-  "//": "Where the map opens and how far it zooms. \"view\": null fits the map to your rides. See README.md.",
+  "//": "Where the map opens and how far it zooms. \"view\": null fits the map to your rides. \"overpass\" is where road and trail searches go. See README.md.",
   "view": null,
   "minZoom": 0,
   "maxZoom": 19,
-  "background": "#eeeeee"
+  "background": "#eeeeee",
+  "overpass": ["https://overpass-api.de/api/interpreter"]
 }

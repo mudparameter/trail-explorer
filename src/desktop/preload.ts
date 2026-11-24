@@ -36,5 +36,6 @@ const api: TrailApi = {
   getSaved: () => call('getSaved'),
   saveView: (v) => call('saveView', v),
   saveShowZones: (on) => call('saveShowZones', on),
+  findRoads: (c, r) => call('findRoads', c, r),
 };
 contextBridge.exposeInMainWorld('trail', api);

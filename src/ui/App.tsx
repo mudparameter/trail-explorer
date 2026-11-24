@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Bounds, ConfigState, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
 import type { Config } from '../core/config.ts';
+import { distance, MIN_AREA, type RoadKind } from '../core/roads.ts';
 import { trail } from './api.ts';
 import { Customize } from './Customize.tsx';
 import { buildStyle, type Bundled } from './mapstyle.ts';
 import { MapView } from './MapView.tsx';
 import { Help, KeyForm, Settings } from './Screens.tsx';
+import { RoadsPanel, type Search } from './Roads.tsx';
 import { Sidebar } from './Sidebar.tsx';
 
 export type Screen = 'map' | 'customize' | 'settings' | 'help';
@@ -38,6 +40,12 @@ export function App() {
   const [view, setView] = useState<View | null>(null);
   const [showZones, setShowZones] = useState(true);
   const [placing, setPlacing] = useState<Placing>(null);
+  const [drawing, setDrawing] = useState(false);
+  const [drawRadius, setDrawRadius] = useState<number | null>(null);
+  const [search, setSearch] = useState<Search | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [hiddenKinds, setHiddenKinds] = useState<RoadKind[]>([]);
+  const searchId = useRef(0);
 
   const config = (c: ConfigState) => {
     setCfg(c);
@@ -62,11 +70,15 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    if (!placing) return;
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setPlacing(null);
+    if (!placing && !drawing) return;
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setPlacing(null);
+      setDrawing(false);
+    };
     window.addEventListener('keydown', esc);
     return () => window.removeEventListener('keydown', esc);
-  }, [placing]);
+  }, [placing, drawing]);
 
   // Sliders move many times a second, so the file is written once they stop.
   const saveTimer = useRef(0);
@@ -101,6 +113,37 @@ export function App() {
     else if (!showZones) toggleZones(true);
   };
 
+  const startDrawing = () => {
+    setScreen('map');
+    setPlacing(null);
+    setDrawRadius(null);
+    setDrawing(true);
+  };
+  const findRoads = async (center: [number, number], radius: number) => {
+    const id = ++searchId.current;
+    setSelected(null);
+    setSearch({ center, radius, state: 'loading', roads: [] });
+    const r = await trail.findRoads(center, radius);
+    // A newer search, or Clear, wins.
+    if (id !== searchId.current) return;
+    setSearch(r.ok ? { center, radius, state: 'done', roads: r.value } : { center, radius, state: 'error', roads: [], error: r.error });
+  };
+  const drawn = (center: [number, number], radius: number) => {
+    if (radius < MIN_AREA) {
+      setDrawRadius(null);
+      setNotice(`Make the circle at least ${MIN_AREA} m across from its centre. Click the centre again.`);
+      return;
+    }
+    setNotice(null);
+    setDrawing(false);
+    void findRoads(center, radius);
+  };
+  const clearSearch = () => {
+    searchId.current++;
+    setSearch(null);
+    setSelected(null);
+  };
+
   const addMap = async (file?: File) => {
     if (adding) return;
     setAdding(true);
@@ -125,9 +168,13 @@ export function App() {
 
   const hv = status?.heatmapVersion ?? 0;
   const shown = useMemo(() => (cfg ? withStates(cfg.config, layers) : null), [cfg, layers]);
+  const explore = useMemo(
+    () => (search ? { center: search.center, radius: search.radius, roads: search.roads.filter((r) => !hiddenKinds.includes(r.kind)), selected } : null),
+    [search, hiddenKinds, selected],
+  );
   const style = useMemo(
-    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones }) : null),
-    [shown, cfg, bundled, hv, showZones],
+    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones, drawing, explore }) : null),
+    [shown, cfg, bundled, hv, showZones, drawing, explore],
   );
   if (!status || !saved || !cfg || !shown || !style) return null;
 
@@ -157,7 +204,8 @@ export function App() {
         status={status} cfg={cfg} config={shown} adding={adding} screen={screen} setScreen={setScreen} change={change} go={go}
         goToRides={goToRides} addMap={() => void addMap()} notice={setNotice}
         showZones={showZones} setShowZones={toggleZones} placing={placing}
-        setPlacing={(p) => { setScreen('map'); setPlacing(p); }}
+        setPlacing={(p) => { setScreen('map'); setDrawing(false); setPlacing(p); }}
+        drawing={drawing} startDrawing={startDrawing}
       />
       <div className="main">
         {status.keyProblem && screen !== 'settings' && (
@@ -178,14 +226,29 @@ export function App() {
             Click the map where the zone should {placing.kind === 'new' ? 'go' : 'move to'}. <button onClick={() => setPlacing(null)}>Cancel</button>
           </div>
         )}
+        {drawing && screen === 'map' && (
+          <div className="notice" role="status">
+            {drawRadius === null ? 'Click the centre of the area to search.' : `Radius ${distance(drawRadius)}. Click again to finish.`}
+            {' '}<button onClick={() => setDrawing(false)}>Cancel</button>
+          </div>
+        )}
         {offline && <div className="notice">{offline}</div>}
         {notice && <div className="notice" role="alert">{notice} <button onClick={() => setNotice(null)}>Close</button></div>}
         {screen === 'map' && (
-          <MapView
-            style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
-            placing={placing !== null} onPlace={(at) => void place(at)}
-            goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
-          />
+          <div className="map-wrap">
+            <MapView
+              style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
+              placing={placing !== null} onPlace={(at) => void place(at)}
+              drawing={drawing} onDrawn={drawn} onDrawRadius={setDrawRadius} onPickRoad={setSelected}
+              goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
+            />
+            {search && (
+              <RoadsPanel
+                search={search} selected={selected} select={setSelected} hidden={hiddenKinds} setHidden={setHiddenKinds}
+                go={go} retry={() => void findRoads(search.center, search.radius)} redraw={startDrawing} close={clearSearch}
+              />
+            )}
+          </div>
         )}
         {screen === 'customize' && <Customize cfg={cfg} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
         {screen === 'settings' && <Settings status={status} />}

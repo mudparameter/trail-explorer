@@ -1,6 +1,7 @@
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
 import type { Config, FILES, Problem } from './config.ts';
+import type { Road } from './roads.ts';
 import type { CircleEdit } from './zones.ts';
 
 export interface SyncStatus {
@@ -94,4 +95,6 @@ export interface TrailApi {
   getSaved(): Promise<Saved>;
   saveView(view: View): Promise<void>;
   saveShowZones(on: boolean): Promise<void>;
+  /** Every road and trail within `radius` metres, from OpenStreetMap. Needs the internet. */
+  findRoads(center: [number, number], radius: number): Promise<Result<Road[]>>;
 }

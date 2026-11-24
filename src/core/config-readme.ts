@@ -18,7 +18,7 @@ Keep this folder private if it has zones in it: they show where you live.
 
 | File | What it sets |
 |---|---|
-| \`map.json\` | Where the map opens, how far it zooms, background colour |
+| \`map.json\` | Where the map opens, how far it zooms, background colour, road data server |
 | \`heatmap.json\` | Colours for each number of passes, and how rides are matched |
 | \`layers.json\` | Every layer, top first: your rides, web maps and map files |
 | \`maps/\` | Offline map files (.pmtiles or .mbtiles) named in layers.json |
@@ -31,7 +31,8 @@ Keep this folder private if it has zones in it: they show where you live.
   "view": { "center": [-0.47, 39.7], "zoom": 11 },
   "minZoom": 0,
   "maxZoom": 19,
-  "background": "#eeeeee"
+  "background": "#eeeeee",
+  "overpass": ["https://overpass-api.de/api/interpreter"]
 }
 \`\`\`
 
@@ -40,6 +41,10 @@ Keep this folder private if it has zones in it: they show where you live.
   start the desktop app remembers where you left it.
 - \`minZoom\`, \`maxZoom\`: how far out and in the map can go.
 - \`background\`: shown where no layer has anything.
+- \`overpass\`: the Overpass API servers that road and trail searches ask for
+  OpenStreetMap data, tried in order when one is busy. The circle's position
+  is sent to them. Other public servers are listed at
+  https://wiki.openstreetmap.org/wiki/Overpass_API, or run your own.
 
 ## heatmap.json
 

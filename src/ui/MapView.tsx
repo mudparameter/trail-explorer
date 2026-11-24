@@ -1,7 +1,11 @@
-import { AttributionControl, Map as GLMap, NavigationControl, ScaleControl, setWorkerUrl, type StyleSpecification } from 'maplibre-gl';
+import { AttributionControl, Map as GLMap, NavigationControl, ScaleControl, setWorkerUrl, type GeoJSONSource, type StyleSpecification } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef } from 'react';
 import type { Bounds, View } from '../core/api.ts';
+import { MAX_AREA } from '../core/roads.ts';
+import { metres } from '../core/track.ts';
+import { circleRing } from '../core/zones.ts';
+import { DRAW, ROAD_LINES } from './mapstyle.ts';
 
 setWorkerUrl(new URL(workerUrl, location.href).href);
 
@@ -16,6 +20,13 @@ interface Props {
   /** Clicks place something, such as a zone, instead of moving the map. */
   placing: boolean;
   onPlace(at: [number, number]): void;
+  /** Clicks draw a circle: one for the centre, one for the edge. */
+  drawing: boolean;
+  onDrawn(center: [number, number], radius: number): void;
+  /** The radius while drawing, or null before the centre is placed. */
+  onDrawRadius(r: number | null): void;
+  /** A found road was clicked, or the map away from them. */
+  onPickRoad(key: string | null): void;
   goTo: { bounds: Bounds | View; n: number } | null;
   /** Called once the jump is made, so it is not repeated. */
   onWent(): void;
@@ -23,11 +34,14 @@ interface Props {
   onTileError(message: string | null): void;
 }
 
-export function MapView({ style, view, startView, focus, minZoom, maxZoom, placing, onPlace, goTo, onWent, onView, onTileError }: Props) {
+export function MapView(props: Props) {
+  const { style, view, startView, focus, minZoom, maxZoom, placing, drawing, goTo } = props;
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<GLMap | null>(null);
-  const cb = useRef({ onWent, onView, onTileError, onPlace, placing });
-  cb.current = { onWent, onView, onTileError, onPlace, placing };
+  const cb = useRef(props);
+  cb.current = props;
+  /** The centre of the circle being drawn. */
+  const center = useRef<[number, number] | null>(null);
 
   useEffect(() => {
     const m = new GLMap({
@@ -48,8 +62,38 @@ export function MapView({ style, view, startView, focus, minZoom, maxZoom, placi
       console.error('Map error:', e.error?.message);
       if (!navigator.onLine) cb.current.onTileError('No internet. Default maps need it. Your rides and custom maps still work.');
     });
+    const radiusTo = (lon: number, lat: number) => Math.min(MAX_AREA, metres(center.current![0], center.current![1], lon, lat));
     m.on('click', (e) => {
-      if (cb.current.placing) cb.current.onPlace(e.lngLat.toArray() as [number, number]);
+      const at = e.lngLat.toArray() as [number, number];
+      if (cb.current.placing) cb.current.onPlace(at);
+      else if (cb.current.drawing) {
+        if (!center.current) {
+          center.current = at;
+          cb.current.onDrawRadius(0);
+        } else {
+          const c = center.current;
+          const r = radiusTo(at[0], at[1]);
+          center.current = null;
+          cb.current.onDrawn(c, r);
+        }
+      } else if (m.getLayer(ROAD_LINES)) {
+        const p = e.point;
+        const hit = m.queryRenderedFeatures([[p.x - 4, p.y - 4], [p.x + 4, p.y + 4]], { layers: [ROAD_LINES] })[0];
+        cb.current.onPickRoad(hit ? String(hit.properties.key) : null);
+      }
+    });
+    m.on('mousemove', (e) => {
+      if (!cb.current.drawing || !center.current) return;
+      const r = radiusTo(e.lngLat.lng, e.lngLat.lat);
+      const src = m.getSource(DRAW) as GeoJSONSource | undefined;
+      src?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circleRing(center.current, Math.max(r, 1))] } });
+      cb.current.onDrawRadius(r);
+    });
+    m.on('mouseenter', ROAD_LINES, () => {
+      if (!cb.current.placing && !cb.current.drawing) m.getCanvas().style.cursor = 'pointer';
+    });
+    m.on('mouseleave', ROAD_LINES, () => {
+      if (!cb.current.placing && !cb.current.drawing) m.getCanvas().style.cursor = '';
     });
     const online = () => cb.current.onTileError(null);
     window.addEventListener('online', online);
@@ -71,8 +115,14 @@ export function MapView({ style, view, startView, focus, minZoom, maxZoom, placi
     map.current?.setMaxZoom(maxZoom);
   }, [minZoom, maxZoom]);
   useEffect(() => {
-    if (map.current) map.current.getCanvas().style.cursor = placing ? 'crosshair' : '';
-  }, [placing]);
+    const m = map.current;
+    if (!m) return;
+    m.getCanvas().style.cursor = placing || drawing ? 'crosshair' : '';
+    // Two clicks to draw would otherwise zoom in.
+    if (drawing) m.doubleClickZoom.disable();
+    else m.doubleClickZoom.enable();
+    if (!drawing) center.current = null;
+  }, [placing, drawing]);
   useEffect(() => {
     if (!goTo || !map.current) return;
     const b = goTo.bounds;

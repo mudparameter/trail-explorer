@@ -11,6 +11,7 @@
 // Every file and every field is optional. A bad value is reported and replaced
 // by its default, so one typo never stops the app.
 import type { Bounds, View } from './api.ts';
+import { DEFAULT_OVERPASS } from './roads.ts';
 import { parseZones, type Zone } from './zones.ts';
 
 export interface Band {
@@ -41,6 +42,8 @@ export interface MapConfig {
   minZoom: number;
   maxZoom: number;
   background: string;
+  /** Overpass API servers that road and trail searches ask for OpenStreetMap data, tried in order. */
+  overpass: string[];
 }
 export interface HeatmapConfig {
   bands: Band[];
@@ -72,7 +75,7 @@ export const FILES = ['map.json', 'heatmap.json', 'layers.json'] as const;
 const OSM = '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
 
 export const DEFAULTS: Config = {
-  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee' },
+  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee', overpass: DEFAULT_OVERPASS },
   heatmap: {
     bands: [
       { from: 1, color: '#2f6bff' },
@@ -221,6 +224,19 @@ const bounds = (v: unknown): Bounds => {
   return Array.isArray(v) && v.length === 4 && v.every(isNum) && b[0]! < b[2]! && b[1]! < b[3]! && b[0]! >= -180 && b[2]! <= 180 && b[1]! >= -90 && b[3]! <= 90
     ? (v as Bounds) : bad('should be [west, south, east, north], like [-19, 27, 5.5, 44.5].');
 };
+const httpsUrl = (v: unknown): string => {
+  if (typeof v !== 'string' || v.length > 2000) return bad('should be a web address.');
+  try {
+    if (new URL(v.trim()).protocol === 'https:') return v.trim();
+  } catch {}
+  return bad(`has "${v}", which is not a web address starting with https://.`);
+};
+/** One web address, or a list of 1 to 5. */
+const servers = (v: unknown): string[] => {
+  const list = typeof v === 'string' ? [v] : v;
+  if (!Array.isArray(list) || list.length < 1 || list.length > 5) return bad('should be a web address, or a list of 1 to 5.');
+  return list.map(httpsUrl);
+};
 const within = <T>(label: string, check: (v: unknown) => T) => (v: unknown): T => {
   try {
     return check(v);
@@ -232,7 +248,7 @@ const within = <T>(label: string, check: (v: unknown) => T) => (v: unknown): T =
 function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapConfig {
   const d = DEFAULTS.map;
   if (!o) return { ...d };
-  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background']);
+  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background', 'overpass']);
   const view = f.get<View | null>('view', d.view, (v) => {
     if (v === null) return null;
     if (!v || typeof v !== 'object' || Array.isArray(v)) return bad('should be { "center": [lon, lat], "zoom": 11 } or null.');
@@ -244,7 +260,7 @@ function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapCon
     f.bad('"maxZoom" is smaller than "minZoom". Using the default instead.');
     maxZoom = Math.max(minZoom, d.maxZoom);
   }
-  return { view, minZoom, maxZoom, background: f.get('background', d.background, color) };
+  return { view, minZoom, maxZoom, background: f.get('background', d.background, color), overpass: f.get('overpass', d.overpass, servers) };
 }
 
 function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): HeatmapConfig {
@@ -386,7 +402,7 @@ export function tileUrlProblem(tiles: unknown): string | null {
 // --- writing --------------------------------------------------------------------
 
 const NOTES: Record<(typeof FILES)[number], string> = {
-  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. See README.md.',
+  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. See README.md.',
   'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. radius, angle and step change how rides are matched. See README.md.',
   'layers.json': 'Every layer, top first. Types: heatmap, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
 };
