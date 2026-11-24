@@ -66,6 +66,9 @@ Keep this folder private if it has zones in it: they show where you live.
   start `from` 1. `label` is optional; without it the legend says "2 to 3",
   "40 or more" and so on.
 - `outline`: the colour drawn around every line.
+- `hide`: kinds of activity to leave off the heatmap, from `"cycling"`,
+  `"running"`, `"walking"` (and hiking), `"snow"`, `"water"` and `"other"`.
+  The sidebar's checkboxes under Rides change it.
 - `radius` (metres), `angle` (degrees), `step` (metres): how close and how
   parallel a ride must be to count as riding an existing section, and how
   finely new sections are made. Change these only to tune the drawing.

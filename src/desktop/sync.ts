@@ -1,7 +1,7 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SyncStatus } from '../core/api.ts';
-import { Busy, Garmin, GarminError, isVirtual, KeyRejected, Offline } from './garmin.ts';
+import { Busy, Garmin, GarminError, KeyRejected, noGpsKind, Offline } from './garmin.ts';
 import type { Store } from './store.ts';
 
 export interface SyncDeps {
@@ -98,6 +98,8 @@ export class Sync {
     try {
       this.set('listing', 'Looking for rides.');
       const started = new Date();
+      // Syncs once listed only cycling. Every kind is listed now, so look through all of them once.
+      if (store.get<string>('syncKinds') !== 'all') store.set('lastSyncStart', null);
       const last = store.get<string>('lastSyncStart');
       // A week of overlap catches rides uploaded late.
       const from = last ? new Date(Date.parse(last) - 7 * DAY).toISOString().slice(0, 10) : null;
@@ -106,7 +108,7 @@ export class Sync {
         const page = await this.call(() => garmin.search(at, from, signal), signal, 'listing');
         const before = seen.size;
         for (const a of page.activities) seen.add(a.id);
-        store.addRides(page.activities.filter((a) => !isVirtual(a.sport)));
+        store.addRides(page.activities.filter((a) => !a.noMap && !noGpsKind(a.sport)));
         this.d.changed();
         // Stop at the end, or if Garmin repeats itself.
         if (!page.size || seen.size === before) break;
@@ -114,6 +116,7 @@ export class Sync {
       }
       store.retryFailed();
       store.set('lastSyncStart', started.toISOString());
+      store.set('syncKinds', 'all');
       this.keyProblem = null;
 
       this.set('downloading');

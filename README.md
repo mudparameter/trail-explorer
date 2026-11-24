@@ -10,7 +10,7 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 ## Features
 
 - **Heatmap of every ride.** Each pass counts, so five laps count as five and an out-and-back counts as two. Colors run from blue (ridden once) to white (40 times or more).
-- **Syncs from Garmin.** Uses your Garmin personal API key and picks up new rides on its own. It includes cycling activities with GPS and leaves out virtual and indoor rides.
+- **Syncs from Garmin.** Uses your Garmin personal API key and picks up new rides on its own. It includes every activity with GPS (rides, hikes, runs, ski days and so on) and leaves out virtual and indoor ones. Untick kinds of activity in the sidebar to leave them off the heatmap.
 - **Import an export .zip.** In Settings, add rides from Garmin's "Export your data" .zip or a Strava export (.fit, .gpx and .tcx files, gzipped or not, zips inside zips included). Rides you already have, from Garmin sync or an earlier import, are matched by start time and left out, and Garmin sync won't download imported rides again. The .zip is only read; just the new rides are kept.
 - **Map layers.** The world map (OpenFreeMap), a world topo map (OpenTopoMap) and a Spain topo map (IGN). You can switch each one on or off, reorder them and set how see-through they are. Ride lines and road and trail lines also have a line width slider.
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.

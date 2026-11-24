@@ -11,6 +11,7 @@
 //
 // Every file and every field is optional. A bad value is reported and replaced
 // by its default, so one typo never stops the app.
+import { ACTIVITY_IDS, type Activity } from './activities.ts';
 import type { Bounds, View } from './api.ts';
 import { AREAS_FILE, parseAreas, type Area } from './areas.ts';
 import { DEFAULT_OVERPASS } from './roads.ts';
@@ -53,6 +54,8 @@ export interface MapConfig {
 export interface HeatmapConfig {
   bands: Band[];
   outline: string;
+  /** Kinds of activity left off the heatmap. */
+  hide: Activity[];
   /** Metres within which a ride counts as on an existing section. */
   radius: number;
   /** Largest difference in direction, in degrees, for a ride to join a section. */
@@ -94,6 +97,7 @@ export const DEFAULTS: Config = {
       { from: 40, color: '#ffffff' },
     ],
     outline: '#14141e',
+    hide: [],
     radius: 15,
     angle: 35,
     step: 10,
@@ -282,8 +286,8 @@ function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapCon
 
 function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): HeatmapConfig {
   const d = DEFAULTS.heatmap;
-  if (!o) return { ...d, bands: [...d.bands] };
-  const f = new Fields('heatmap.json', o, problems, ['bands', 'outline', 'radius', 'angle', 'step']);
+  if (!o) return { ...d, bands: [...d.bands], hide: [] };
+  const f = new Fields('heatmap.json', o, problems, ['bands', 'outline', 'hide', 'radius', 'angle', 'step']);
   const bands = f.get<Band[]>('bands', d.bands, (v) => {
     if (!Array.isArray(v) || v.length < 1 || v.length > 12) return bad('should be a list of 1 to 12 bands.');
     const out = v.map((b, i): Band => {
@@ -303,6 +307,8 @@ function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): He
   return {
     bands,
     outline: f.get('outline', d.outline, color),
+    hide: f.get<Activity[]>('hide', [], (v) =>
+      Array.isArray(v) && v.every((x) => ACTIVITY_IDS.includes(x)) ? [...new Set(v as Activity[])] : bad(`should be a list of ${ACTIVITY_IDS.map((a) => `"${a}"`).join(', ')}.`)),
     radius: f.get('radius', d.radius, number(3, 100)),
     angle: f.get('angle', d.angle, number(5, 90)),
     step: f.get('step', d.step, number(2, 50)),
@@ -446,7 +452,7 @@ export function tileUrlProblem(tiles: unknown): string | null {
 
 const NOTES: Record<(typeof FILES)[number], string> = {
   'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. See README.md.',
-  'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. radius, angle and step change how rides are matched. See README.md.',
+  'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. "hide" leaves kinds of activity out. radius, angle and step change how rides are matched. See README.md.',
   'layers.json': 'Every layer, top first. Types: heatmap, roads, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
 };
 

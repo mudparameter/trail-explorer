@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AreaView, Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
+import { ACTIVITIES, type Activity } from '../core/activities.ts';
 import { APP_ZONES, bandLabels, layerState, MAX_WIDTH, MIN_WIDTH, type Config } from '../core/config.ts';
 import { MAX_RADIUS, MIN_RADIUS, type Zone } from '../core/zones.ts';
 import type { Placing, Screen } from './App.tsx';
@@ -90,7 +91,7 @@ export function Sidebar(p: Props) {
           <progress value={s.done} max={s.total || 1} aria-label="Rides downloaded" />
         </>
       ) : (
-        <p>{s.onMap} ride{s.onMap === 1 ? '' : 's'} on the map</p>
+        <ActivityFilter status={status} config={config} report={report} />
       )}
       {s.message && <p className="small">{s.message}</p>}
       {s.buildingHeatmap && <p className="small">Drawing the heatmap…</p>}
@@ -233,3 +234,41 @@ function Zones(p: Props & { report(r: Promise<{ ok: boolean; error?: string }>):
   );
 }
 
+
+/** How many rides are on the map, and a checkbox for each kind of activity there is. */
+function ActivityFilter({ status, config, report }: { status: Status; config: Config; report(r: Promise<{ ok: boolean; error?: string }>): Promise<boolean> }) {
+  // Shown at once, before the file is saved and read back.
+  const [pending, setPending] = useState<Activity[] | null>(null);
+  const saved = config.heatmap.hide;
+  useEffect(() => setPending(null), [saved]);
+  const hide = pending ?? saved;
+  const counts = status.activities;
+  const kinds = ACTIVITIES.filter((a) => counts[a.id] || hide.includes(a.id));
+  const shown = kinds.reduce((n, a) => n + (hide.includes(a.id) ? 0 : counts[a.id] ?? 0), 0);
+  const hidden = status.sync.onMap - shown;
+  const toggle = (a: Activity) => {
+    const next = hide.includes(a) ? hide.filter((x) => x !== a) : [...hide, a];
+    setPending(next);
+    void report(trail.saveConfig('heatmap.json', { ...config.heatmap, hide: next })).then((ok) => ok || setPending(null));
+  };
+  return (
+    <>
+      <p>
+        {shown} ride{shown === 1 ? '' : 's'} on the map
+        {hidden > 0 && <span className="small"> ({hidden} hidden)</span>}
+      </p>
+      {kinds.length > 1 && (
+        <ul className="activities" aria-label="Kinds of activity">
+          {kinds.map((a) => (
+            <li key={a.id}>
+              <label>
+                <input type="checkbox" checked={!hide.includes(a.id)} onChange={() => toggle(a.id)} /> {a.label}
+                <span className="small"> {counts[a.id] ?? 0}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}

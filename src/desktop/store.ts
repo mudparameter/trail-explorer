@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { MapInfo } from '../core/api.ts';
+import { activityOf, type Activity } from '../core/activities.ts';
 import { SAME_RIDE_MS, startMs } from '../core/import.ts';
 
 /** 'same' is a ride Garmin lists that was already imported from an export: it is never downloaded. */
@@ -102,15 +103,25 @@ export class Store {
     }
     return out;
   }
-  /** Tracks in date order, so the heatmap always comes out the same. */
-  tracks(): Float64Array[] {
+  /** Tracks in date order, so the heatmap always comes out the same. Leaves out the kinds of activity in `hide`. */
+  tracks(hide: Activity[] = []): Float64Array[] {
     return this.db
-      .prepare("SELECT track FROM ride WHERE status = 'done' AND track IS NOT NULL ORDER BY started_at, id")
+      .prepare("SELECT sport, track FROM ride WHERE status = 'done' AND track IS NOT NULL ORDER BY started_at, id")
       .all()
+      .filter((r) => !hide.length || !hide.includes(activityOf(String(r.sport))))
       .map((r) => {
         const b = r.track as Uint8Array;
         return new Float64Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
       });
+  }
+  /** Rides with a track, by kind of activity. */
+  activityCounts(): Partial<Record<Activity, number>> {
+    const out: Partial<Record<Activity, number>> = {};
+    for (const r of this.db.prepare("SELECT sport, count(*) AS n FROM ride WHERE status = 'done' GROUP BY sport").all()) {
+      const a = activityOf(String(r.sport));
+      out[a] = (out[a] ?? 0) + Number(r.n);
+    }
+    return out;
   }
   deleteRides() {
     this.db.exec("DELETE FROM ride; DELETE FROM setting WHERE k IN ('lastSync', 'lastSyncStart', 'focus'); VACUUM;");

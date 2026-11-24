@@ -29,6 +29,8 @@ export interface Activity {
   sport: string;
   name: string;
   distance: number | null;
+  /** Garmin says it has no map. */
+  noMap?: boolean;
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
@@ -44,10 +46,14 @@ export function toActivity(a: any): Activity | null {
     sport,
     name: str(a.activityName).slice(0, 200),
     distance: Number.isFinite(a.distance) ? a.distance : null,
+    ...(a.hasPolyline === false ? { noMap: true } : {}),
   };
 }
 /** Virtual rides have GPS, but not for anywhere you have been. */
 export const isVirtual = (sport: string) => /virtual/.test(sport);
+/** Activities that never have a GPS track, so are not worth downloading. */
+export const noGpsKind = (sport: string) =>
+  isVirtual(sport) || /indoor|treadmill|trainer|strength|yoga|pilates|breathwork|meditation|cardio|hiit|elliptical|stair|floor_climbing|boulder|fitness_equipment|lap_swimming|pool/.test(sport);
 
 export function tokenExpiry(token: string): number {
   try {
@@ -134,7 +140,7 @@ export class Garmin {
   }
 
   async search(start: number, from: string | null, signal?: AbortSignal): Promise<{ size: number; activities: Activity[] }> {
-    const q = new URLSearchParams({ start: String(start), limit: '100', activityType: 'cycling' });
+    const q = new URLSearchParams({ start: String(start), limit: '100' });
     if (from) q.set('startDate', from);
     const body = await this.get(`${SEARCH}?${q}`, undefined, signal);
     const list = body.length ? JSON.parse(body.toString()) : [];

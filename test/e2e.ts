@@ -112,6 +112,19 @@ await w.getByText('1 new ride added, 1 ride already here.').waitFor();
 await w.getByText('75 rides on the map').waitFor();
 await shot('3b-imported');
 await w.getByRole('button', { name: 'Map', exact: true }).click();
+// Kinds of activity can be hidden. The imported file has no sport, so it is "Other".
+const heatHide = () => JSON.parse(readFileSync(join(data, 'config', 'heatmap.json'), 'utf8')).hide;
+const kinds = w.getByRole('list', { name: 'Kinds of activity' });
+await kinds.getByRole('checkbox', { name: /Other/ }).uncheck();
+await w.getByText('74 rides on the map').waitFor();
+await w.getByText('(1 hidden)').waitFor();
+await waitFor(() => JSON.stringify(heatHide()) === '["other"]', 'hidden kind saved');
+await w.waitForFunction(() => !document.body.innerText.includes('Drawing the heatmap'));
+await shot('3c-hidden-kind');
+await kinds.getByRole('checkbox', { name: /Other/ }).check();
+await w.getByText('75 rides on the map').waitFor();
+await waitFor(() => JSON.stringify(heatHide()) === '[]', 'kind shown again');
+assert.ok(await kinds.getByRole('checkbox', { name: /Cycling/ }).isChecked());
 assert.ok(!readdirSync(join(data, 'rides')).some((x) => x.includes('export')), 'the export is not copied');
 
 // A5: other layers

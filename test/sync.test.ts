@@ -41,6 +41,20 @@ test('a second sync downloads only new rides', () => setup({ rides: rides(5) }, 
   assert.equal(f.downloads.length, 6);
   assert.equal(store.counts().done, 6);
 }));
+test('every kind of activity with a map is synced, and history is listed again once after the update', () => setup({ rides: [
+  { id: 1, body: good() }, { id: 2, type: 'hiking', body: good() }, { id: 3, type: 'trail_running', body: good() },
+  { id: 4, type: 'strength_training', body: good() }, { id: 5, type: 'indoor_cycling', body: good() }, { id: 6, type: 'walking', noMap: true, body: good() },
+] }, async ({ f, store, make }) => {
+  // A sync from before: it only listed cycling and remembered when it ran.
+  store.set('lastSyncStart', '2030-01-01T00:00:00Z');
+  await make().go();
+  assert.equal(f.searches[0], '', 'all of history is listed');
+  assert.deepEqual([...f.downloads].sort(), ['1', '2', '3']);
+  assert.deepEqual(store.activityCounts(), { cycling: 1, walking: 1, running: 1 });
+  await make().go();
+  assert.notEqual(f.searches[1], '', 'then only recent activities');
+  assert.equal(f.downloads.length, 3);
+}));
 test('virtual, indoor, broken and non-fit files', () => setup({ rides: [
   { id: 1, body: good() }, { id: 2, type: 'virtual_ride', body: good() }, { id: 3, body: zipOf('a.fit', fit([])) },
   { id: 4, body: Buffer.from('not a zip') }, { id: 5, body: zipOf('a.gpx', Buffer.from('<gpx/>')) },

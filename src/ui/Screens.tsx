@@ -116,7 +116,13 @@ export function Help() {
       <h2>What the colors mean</h2>
       <p>The color shows how many times you have ridden each section. Every pass counts: five laps count as five, and an out-and-back counts as two. Trails closer together than about 15 meters may be joined.</p>
       <h2>Which rides are included</h2>
-      <p>Cycling activities with GPS. Virtual and indoor rides are left out. Garmin appears to return about the last three years. Rides already in the app stay. For older rides, use Import rides in Settings with Garmin's Export your data .zip.</p>
+      <p>
+        Every activity with GPS: rides, hikes, runs, walks, ski days and so on. Virtual and indoor activities, and ones without a map
+        such as strength training, are left out. Garmin appears to return about the last three years. Activities already in the app
+        stay. For older ones, use Import rides in Settings with Garmin's Export your data .zip.
+      </p>
+      <h2>Show only some kinds of activity</h2>
+      <p>Under Rides in the sidebar, untick a kind, such as Walking and hiking, to leave it off the heatmap. It is saved as "hide" in heatmap.json.</p>
       <h2>Map credits</h2>
       <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps and road and trail searches © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
     </main>

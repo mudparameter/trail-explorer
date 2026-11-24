@@ -101,9 +101,9 @@ function start() {
   let version = store.get<number>('heatmapVersion') ?? 0;
   /** Everything in the config that changes the heatmap. When it changes, the heatmap is drawn again. */
   const heatKey = () => {
-    const { bands, radius, angle, step } = config.heatmap;
+    const { bands, radius, angle, step, hide } = config.heatmap;
     const zones = config.zones.map((z) => (z.kind === 'circle' ? [z.center, z.radius] : z.polygons));
-    return JSON.stringify({ zones, bands: bands.map((b) => b.from), radius, angle, step });
+    return JSON.stringify({ zones, bands: bands.map((b) => b.from), radius, angle, step, hide: [...hide].sort() });
   };
   async function buildHeatmap() {
     // Never draw without knowing every zone: the heatmap would show what they hide.
@@ -121,7 +121,7 @@ function start() {
         const key = heatKey();
         const { bands, radius, angle, step } = config.heatmap;
         const out = await runJob<{ json: string; focus: Bounds | null }>('heatmap', {
-          tracks: store.tracks(), zones: config.zones, options: { radius, angle, step, bands: bands.map((b) => b.from) },
+          tracks: store.tracks(config.heatmap.hide), zones: config.zones, options: { radius, angle, step, bands: bands.map((b) => b.from) },
         });
         await writeFile(`${heatFile}.part`, out.json);
         await rename(`${heatFile}.part`, heatFile);
@@ -393,6 +393,7 @@ function start() {
         noGps: c['no-gps'], failed: c.failed + c.unread, lastSync: store.get<string>('lastSync'), buildingHeatmap: building,
       },
       import: importer.status,
+      activities: store.activityCounts(),
       heatmapVersion: version,
       version: app.getVersion(),
     };

@@ -1,3 +1,4 @@
+import type { Activity } from './activities.ts';
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
 import type { Config, FILES, Problem } from './config.ts';
@@ -41,6 +42,8 @@ export interface Status {
   keyProblem: string | null;
   keyExpires: string | null;
   sync: SyncStatus;
+  /** Rides with a track, by kind of activity. */
+  activities: Partial<Record<Activity, number>>;
   /** The last import since the app started, if any. */
   import: ImportStatus | null;
   heatmapVersion: number;

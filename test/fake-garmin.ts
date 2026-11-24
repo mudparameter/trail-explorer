@@ -25,10 +25,12 @@ export interface Fake {
   /** Change behaviour while running. */
   opts: FakeOpts;
   downloads: string[];
+  /** The startDate of each list request, '' for none. */
+  searches: string[];
   tokens: number;
 }
 export interface FakeOpts {
-  rides: { id: number; type?: string; start?: string; body?: Buffer }[];
+  rides: { id: number; type?: string; start?: string; body?: Buffer; noMap?: boolean }[];
   rejectKey?: boolean;
   revokeToken?: boolean;
   busy?: number;
@@ -38,7 +40,7 @@ export interface FakeOpts {
 export async function fakeGarmin(opts: FakeOpts): Promise<Fake> {
   let n = 0;
   let valid = '';
-  const f: Fake = { base: '', close: () => {}, opts, downloads: [], tokens: 0 };
+  const f: Fake = { base: '', close: () => {}, opts, downloads: [], searches: [], tokens: 0 };
   const srv = http.createServer(async (req, res) => {
     const u = new URL(req.url!, 'http://x');
     const send = (c: number, b: string | Buffer = '') => { res.writeHead(c); res.end(b); };
@@ -55,9 +57,12 @@ export async function fakeGarmin(opts: FakeOpts): Promise<Fake> {
     if (u.pathname.endsWith('/search/activities')) {
       const s = Number(u.searchParams.get('start'));
       const from = u.searchParams.get('startDate') ?? '';
-      const list = opts.rides.filter((r) => (r.start ?? '2025-01-01') >= from).slice(s, s + 100);
+      const kind = u.searchParams.get('activityType');
+      if (s === 0) f.searches.push(from);
+      // Like Garmin: a type asks for that type and its subtypes.
+      const list = opts.rides.filter((r) => (r.start ?? '2025-01-01') >= from && (!kind || (r.type ?? 'mountain_biking').includes(kind === 'cycling' ? 'bik' : kind))).slice(s, s + 100);
       return send(200, JSON.stringify(list.map((r) => ({
-        activityId: r.id, activityName: 'Made up', distance: 1000, startTimeGMT: r.start ?? '2025-01-01 10:00:00', activityType: { typeKey: r.type ?? 'mountain_biking' },
+        activityId: r.id, activityName: 'Made up', distance: 1000, startTimeGMT: r.start ?? '2025-01-01 10:00:00', activityType: { typeKey: r.type ?? 'mountain_biking' }, hasPolyline: !r.noMap,
       }))));
     }
     const m = u.pathname.match(/\/download-service\/files\/activity\/(\d+)$/);
