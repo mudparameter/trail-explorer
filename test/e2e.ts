@@ -241,7 +241,7 @@ await waitFor(() => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).lay
 await w.waitForFunction((n) => JSON.stringify((window as any).__map.getPaintProperty('heat', 'line-width')) !== n, normal);
 await w.getByLabel('My rides line width').dblclick();
 await waitFor(() => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).layers.find((l: any) => l.id === 'heatmap')?.width === undefined, 'ride width reset');
-assert.equal(await heatWidth(), normal);
+await w.waitForFunction((n) => JSON.stringify((window as any).__map.getPaintProperty('heat', 'line-width')) === n, normal);
 
 // Roads and trails: circles are saved in areas.json, their data is downloaded once
 // and shared, and each can be named, hidden, filtered and deleted.
