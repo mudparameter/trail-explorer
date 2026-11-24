@@ -15,7 +15,7 @@ const resources = app.isPackaged ? join(process.resourcesPath, 'resources') : jo
 const uiDir = join(here, '..', 'ui');
 
 // Anything not packaged is a development copy. It has its own data folder and
-// Keychain entry, so it can run beside the real app and never touches its rides or key.
+// keychain entry, so it can run beside the real app and never touches its rides or key.
 const appName = app.isPackaged ? 'Trail Explorer' : 'Trail Explorer Dev';
 app.setName(appName);
 /** Address of the hot reload server under `npm run dev`, otherwise null. */
@@ -52,7 +52,7 @@ function start() {
   const heatFile = join(data, 'heatmap', 'heatmap.json');
   const ridesDir = join(data, 'rides');
   const store = new Store(join(data, 'trail-explorer.db'));
-  const keyFile = new KeyFile(join(data, 'key.bin'));
+  const keyFile = new KeyFile(join(data, 'key.bin'), { allowPlain: test.data !== undefined });
   const maps = new Maps(join(data, 'maps'));
   for (const m of store.maps()) maps.register(m.id, m.file);
 

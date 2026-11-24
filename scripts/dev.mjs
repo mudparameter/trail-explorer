@@ -9,13 +9,24 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { sandboxProblem } from './check-sandbox.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const support = join(homedir(), 'Library', 'Application Support');
+// Where Electron keeps app data on each system (its appData path).
+const support = {
+  darwin: join(homedir(), 'Library', 'Application Support'),
+  win32: process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'),
+}[process.platform] ?? (process.env.XDG_CONFIG_HOME || join(homedir(), '.config'));
 const real = join(support, 'Trail Explorer');
 const dev = join(support, 'Trail Explorer Dev');
 const db = 'trail-explorer.db';
 const args = process.argv.slice(2);
+
+const problem = sandboxProblem();
+if (problem) {
+  console.error(problem);
+  process.exit(1);
+}
 const again = args.includes('--fresh-copy');
 
 if (existsSync(join(real, db)) && (again || !existsSync(join(dev, db)))) {

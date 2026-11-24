@@ -37,7 +37,7 @@ export function KeyForm({ onSaved }: { onSaved?(): void }) {
         {error && <p className="error" role="alert">{error}</p>}
         <button disabled={busy || !key.trim()}>{busy ? 'Checking with Garmin…' : 'Save key'}</button>
       </form>
-      <p className="small">The key is encrypted on this Mac and sent only to Garmin. macOS may ask to let Trail Explorer use your keychain.</p>
+      <p className="small">The key is encrypted on this computer with your system keychain and sent only to Garmin. Your system may ask to let Trail Explorer use the keychain.</p>
     </>
   );
 }
@@ -76,8 +76,8 @@ export function Settings({ status }: { status: Status }) {
       )}
       {form && <KeyForm onSaved={() => setReplace(false)} />}
       <h2>Ride data</h2>
-      <p>{status.sync.onMap} rides are stored on this Mac.</p>
-      <Confirm label="Delete all rides" question="Delete every ride from this Mac? Garmin may only return about the last three years." action={() => trail.deleteRides()} />
+      <p>{status.sync.onMap} rides are stored on this computer.</p>
+      <Confirm label="Delete all rides" question="Delete every ride from this computer? Garmin may only return about the last three years." action={() => trail.deleteRides()} />
       <p className="small">While a key is saved, the next sync downloads rides again. Remove the key first to keep them deleted.</p>
       <p className="small">Trail Explorer {status.version}</p>
     </main>
