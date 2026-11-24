@@ -1,6 +1,6 @@
 // Reads, writes and watches the config folder on disk. What the files mean is in core/config.ts.
 import { watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { APP_ZONES, FILES, fileText, parseConfig, type Config, type Problem } from '../core/config.ts';
 import { CONFIG_README } from '../core/config-readme.ts';
@@ -21,6 +21,9 @@ export class ConfigDir {
 
   /** Makes a new folder holding `config`, with a README and empty maps and zones folders. */
   async create(config: Config) {
+    // Only you can read it: zones show where you live.
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    await chmod(this.dir, 0o700);
     await mkdir(join(this.dir, 'maps'), { recursive: true });
     await mkdir(join(this.dir, 'zones'), { recursive: true });
     await writeFile(join(this.dir, 'README.md'), CONFIG_README);
