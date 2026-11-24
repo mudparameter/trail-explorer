@@ -1,0 +1,47 @@
+{
+  "//": "Every layer, top first. Types: heatmap, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.",
+  "layers": [
+    { "id": "heatmap", "type": "heatmap", "name": "My rides", "on": true, "opacity": 1 },
+    {
+      "id": "ign",
+      "type": "raster",
+      "name": "Spain topo",
+      "note": "IGN",
+      "on": false,
+      "opacity": 1,
+      "tiles": [
+        "https://www.ign.es/wmts/mapa-raster?layer=MTN&style=default&tilematrixset=GoogleMapsCompatible&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}"
+      ],
+      "tileSize": 256,
+      "minzoom": 5,
+      "maxzoom": 18,
+      "bounds": [-19, 27, 5.5, 44.5],
+      "attribution": "<a href=\"https://www.ign.es\" target=\"_blank\">CC BY 4.0 ign.es</a>"
+    },
+    {
+      "id": "opentopomap",
+      "type": "raster",
+      "name": "World topo",
+      "note": "OpenTopoMap",
+      "on": false,
+      "opacity": 1,
+      "tiles": [
+        "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://b.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://c.tile.opentopomap.org/{z}/{x}/{y}.png"
+      ],
+      "tileSize": 256,
+      "minzoom": 0,
+      "maxzoom": 17,
+      "attribution": "<a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">© OpenStreetMap contributors</a>, SRTM | <a href=\"https://opentopomap.org\" target=\"_blank\">© OpenTopoMap</a> (CC-BY-SA)"
+    },
+    {
+      "id": "openfreemap",
+      "type": "openfreemap",
+      "name": "World map",
+      "note": "OpenFreeMap",
+      "on": true,
+      "opacity": 1
+    }
+  ]
+}

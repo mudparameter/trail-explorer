@@ -1,0 +1,4 @@
+{"type":"FeatureCollection",
+ "features": [
+  {"type":"Feature","properties":{"name":"Example: around home","radius":400},"geometry":{"type":"Point","coordinates":[-0.4502,39.6871]}}
+ ]}

@@ -1,21 +1,27 @@
 import { useState } from 'react';
-import type { Bounds, LayerState, MapInfo, Status } from '../core/api.ts';
+import type { Bounds, ConfigState, LayerState, Status, View } from '../core/api.ts';
+import { APP_ZONES, bandLabels, type Config } from '../core/config.ts';
+import { MAX_RADIUS, MIN_RADIUS, type Zone } from '../core/zones.ts';
+import type { Placing, Screen } from './App.tsx';
 import { trail } from './api.ts';
-import { COLORS, DEFAULT_MAPS, HEATMAP, LEGEND } from './mapstyle.ts';
 
 interface Props {
   status: Status;
-  layers: LayerState[];
-  maps: MapInfo[];
+  cfg: ConfigState;
+  /** The config as shown, with layer changes that may not be saved yet. */
+  config: Config;
   adding: boolean;
-  screen: string;
-  setScreen(s: 'map' | 'settings' | 'help'): void;
+  screen: Screen;
+  setScreen(s: Screen): void;
   change(l: LayerState[]): void;
-  go(b: Bounds): void;
+  go(b: Bounds | View): void;
   goToRides(): void;
   addMap(): void;
-  renamed(id: string, name: string): void;
-  removed(id: string): void;
+  notice(message: string | null): void;
+  showZones: boolean;
+  setShowZones(on: boolean): void;
+  placing: Placing;
+  setPlacing(p: Placing): void;
 }
 
 function ago(iso: string | null): string {
@@ -28,28 +34,46 @@ function ago(iso: string | null): string {
   return `${Math.round(h / 24)} days ago`;
 }
 
+const SCREENS: [Screen, string][] = [['map', 'Map'], ['customize', 'Customize'], ['settings', 'Settings'], ['help', 'Help']];
+
+/** Where a zone is, for "Go to". */
+function zoneBounds(z: Zone): Bounds {
+  if (z.kind === 'circle') {
+    const d = z.radius / 111_320;
+    const k = d / Math.max(Math.cos((z.center[1] * Math.PI) / 180), 0.01);
+    return [z.center[0] - k * 1.5, z.center[1] - d * 1.5, z.center[0] + k * 1.5, z.center[1] + d * 1.5];
+  }
+  const ps = z.polygons.flatMap((p) => p[0]!);
+  return [Math.min(...ps.map((p) => p[0])), Math.min(...ps.map((p) => p[1])), Math.max(...ps.map((p) => p[0])), Math.max(...ps.map((p) => p[1]))];
+}
+
 export function Sidebar(p: Props) {
-  const { status, layers, maps } = p;
+  const { status, cfg, config } = p;
   const [edit, setEdit] = useState<{ id: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const s = status.sync;
-  const set = (id: string, v: Partial<LayerState>) => p.change(layers.map((l) => (l.id === id ? { ...l, ...v } : l)));
+  const states: LayerState[] = config.layers.map((l) => ({ id: l.id, on: l.on, opacity: l.opacity }));
+  const set = (id: string, v: Partial<LayerState>) => p.change(states.map((l) => (l.id === id ? { ...l, ...v } : l)));
   const move = (i: number, d: number) => {
-    const ls = [...layers];
+    const ls = [...states];
     const [l] = ls.splice(i, 1);
     ls.splice(i + d, 0, l!);
     p.change(ls);
   };
   const busy = s.state !== 'idle' && s.state !== 'error' && s.state !== 'key-rejected';
+  const labels = bandLabels(config.heatmap.bands);
+  const report = async (r: Promise<{ ok: boolean; error?: string }>) => {
+    const x = await r;
+    if (!x.ok) p.notice(x.error ?? 'Something went wrong.');
+    return x.ok;
+  };
 
   return (
     <aside className="side">
       <h1>Trail Explorer</h1>
       <nav>
-        {(['map', 'settings', 'help'] as const).map((x) => (
-          <button key={x} className="link" aria-current={p.screen === x ? 'page' : undefined} onClick={() => p.setScreen(x)}>
-            {x[0]!.toUpperCase() + x.slice(1)}
-          </button>
+        {SCREENS.map(([x, label]) => (
+          <button key={x} className="link" aria-current={p.screen === x ? 'page' : undefined} onClick={() => p.setScreen(x)}>{label}</button>
         ))}
       </nav>
 
@@ -75,53 +99,49 @@ export function Sidebar(p: Props) {
       <h2>Layers</h2>
       <p className="small">The top of the list is drawn on top.</p>
       <ul className="layers">
-        {layers.map((l, i) => {
-          const def = DEFAULT_MAPS.find((d) => d.id === l.id);
-          const map = maps.find((m) => m.id === l.id);
-          const name = l.id === HEATMAP ? 'My rides' : (def?.name ?? map?.name ?? '');
+        {config.layers.map((l, i) => {
+          const info = l.type === 'file' ? cfg.maps[l.id] : undefined;
+          const missing = l.type === 'file' && !info;
           return (
             <li key={l.id}>
               <div className="row top">
                 <label>
-                  <input type="checkbox" checked={l.on} onChange={(e) => set(l.id, { on: e.target.checked })} /> {name}
-                  {def && <span className="small"> {def.note}</span>}
+                  <input type="checkbox" checked={l.on} onChange={(e) => set(l.id, { on: e.target.checked })} /> {l.name}
+                  {l.note && <span className="small"> {l.note}</span>}
+                  {missing && <span className="small error"> (file not found)</span>}
                 </label>
                 <span className="order">
-                  <button aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-                  <button aria-label={`Move ${name} down`} disabled={i === layers.length - 1} onClick={() => move(i, 1)}>↓</button>
+                  <button aria-label={`Move ${l.name} up`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                  <button aria-label={`Move ${l.name} down`} disabled={i === config.layers.length - 1} onClick={() => move(i, 1)}>↓</button>
                 </span>
               </div>
               {l.on && (
-                <input type="range" min={0.1} max={1} step={0.05} value={l.opacity} aria-label={`${name} opacity`} title="Opacity"
+                <input type="range" min={0.1} max={1} step={0.05} value={l.opacity} aria-label={`${l.name} opacity`} title="Opacity"
                   onChange={(e) => set(l.id, { opacity: Number(e.target.value) })} />
               )}
-              {map && edit?.id === map.id && (
+              {l.type === 'file' && edit?.id === l.id && (
                 <form className="row" onSubmit={async (e) => {
                   e.preventDefault();
-                  const r = await trail.renameMap(map.id, edit.name);
-                  if (r.ok) {
-                    p.renamed(map.id, edit.name.trim());
-                    setEdit(null);
-                  }
+                  if (await report(trail.renameMap(l.id, edit.name))) setEdit(null);
                 }}>
                   <input value={edit.name} maxLength={100} autoFocus aria-label="Map name" onChange={(e) => setEdit({ ...edit, name: e.target.value })} />
                   <button>Save</button>
                 </form>
               )}
-              {map && confirm === map.id ? (
+              {l.type === 'file' && confirm === l.id ? (
                 <div className="row small">
-                  Remove this map?
-                  <button onClick={async () => {
+                  Remove this map and delete its file?
+                  <button onClick={() => {
                     setConfirm(null);
-                    if ((await trail.removeMap(map.id)).ok) p.removed(map.id);
+                    void report(trail.removeMap(l.id));
                   }}>Remove</button>
                   <button onClick={() => setConfirm(null)}>Keep</button>
                 </div>
-              ) : map && (
+              ) : l.type === 'file' && (
                 <div className="row small">
-                  <button className="link" onClick={() => { p.setScreen('map'); p.go(map.bounds); }}>Go to</button>
-                  <button className="link" onClick={() => setEdit(edit ? null : { id: map.id, name: map.name })}>Rename</button>
-                  <button className="link" onClick={() => setConfirm(map.id)}>Remove</button>
+                  {info && <button className="link" onClick={() => { p.setScreen('map'); p.go(info.bounds); }}>Go to</button>}
+                  <button className="link" onClick={() => setEdit(edit ? null : { id: l.id, name: l.name })}>Rename</button>
+                  <button className="link" onClick={() => setConfirm(l.id)}>Remove</button>
                 </div>
               )}
             </li>
@@ -131,12 +151,66 @@ export function Sidebar(p: Props) {
       <button disabled={p.adding} onClick={p.addMap}>{p.adding ? 'Adding map…' : 'Add map'}</button>
       <p className="small">Or drop a map file on the window.</p>
 
+      <Zones {...p} report={report} />
+
       <h2>Times ridden</h2>
       <ul className="legend">
-        {LEGEND.map((t, i) => (
-          <li key={t}><span style={{ background: COLORS[i] }} />{t}</li>
+        {config.heatmap.bands.map((b, i) => (
+          <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{labels[i]}</li>
         ))}
       </ul>
     </aside>
+  );
+}
+
+function Zones(p: Props & { report(r: Promise<{ ok: boolean; error?: string }>): Promise<boolean> }) {
+  const zones = p.config.zones;
+  const [edit, setEdit] = useState<{ id: string; name: string; radius: string } | null>(null);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  return (
+    <>
+      <h2>Excluded zones</h2>
+      <p className="small">Rides are left out inside these areas, such as around home.</p>
+      <label className="small"><input type="checkbox" checked={p.showZones} onChange={(e) => p.setShowZones(e.target.checked)} /> Show zones on the map</label>
+      <ul className="layers">
+        {zones.map((z) => (
+          <li key={z.id}>
+            <div>
+              {z.name}
+              <span className="small"> {z.kind === 'circle' ? `${z.radius} m` : 'drawn area'}{z.file !== APP_ZONES && `, ${z.file.replace('zones/', '')}`}</span>
+            </div>
+            {edit?.id === z.id ? (
+              <form className="zone-edit" onSubmit={async (e) => {
+                e.preventDefault();
+                if (await p.report(trail.editZone(z.id, { name: edit.name, radius: Number(edit.radius) }))) setEdit(null);
+              }}>
+                <label>Name <input value={edit.name} maxLength={100} autoFocus onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+                <label>Radius (m) <input type="number" min={MIN_RADIUS} max={MAX_RADIUS} step={10} value={edit.radius} onChange={(e) => setEdit({ ...edit, radius: e.target.value })} /></label>
+                <div className="row"><button>Save</button><button type="button" onClick={() => setEdit(null)}>Cancel</button></div>
+              </form>
+            ) : confirm === z.id ? (
+              <div className="row small">
+                Remove this zone?
+                <button onClick={() => { setConfirm(null); void p.report(trail.removeZone(z.id)); }}>Remove</button>
+                <button onClick={() => setConfirm(null)}>Keep</button>
+              </div>
+            ) : (
+              <div className="row small">
+                <button className="link" onClick={() => { p.setScreen('map'); p.go(zoneBounds(z)); }}>Go to</button>
+                {z.editable && z.kind === 'circle' && (
+                  <>
+                    <button className="link" onClick={() => setEdit({ id: z.id, name: z.name, radius: String(z.radius) })}>Edit</button>
+                    <button className="link" onClick={() => p.setPlacing({ kind: 'move', id: z.id })}>Move</button>
+                  </>
+                )}
+                {z.file === APP_ZONES && <button className="link" onClick={() => setConfirm(z.id)}>Remove</button>}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <button disabled={p.placing !== null} onClick={() => p.setPlacing({ kind: 'new' })}>Add zone</button>
+      {zones.some((z) => z.file !== APP_ZONES) && <p className="small">Zones from other files are changed by editing those files.</p>}
+    </>
   );
 }

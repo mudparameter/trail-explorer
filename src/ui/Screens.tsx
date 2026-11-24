@@ -97,6 +97,10 @@ export function Help() {
         <li>In Trail Explorer, choose Add map and pick the .zip you downloaded, or drop it on the window. You do not need to unzip it.</li>
       </ol>
       <p>The app keeps its own copy, so you can delete the download. Custom maps work without internet.</p>
+      <h2>Hide places, such as around home</h2>
+      <p>Under Excluded zones in the sidebar, choose Add zone and click the map. Rides are left out inside the circle. Edit sets its size; Move places it again. Zones are drawn in red on your map only.</p>
+      <h2>Change colors, maps and where the map opens</h2>
+      <p>Open Customize. Everything there is saved as plain files in the config folder, which you can also edit by hand or copy to another computer.</p>
       <h2>What the colors mean</h2>
       <p>The color shows how many times you have ridden each section. Every pass counts: five laps count as five, and an out-and-back counts as two. Trails closer together than about 15 meters may be joined.</p>
       <h2>Which rides are included</h2>

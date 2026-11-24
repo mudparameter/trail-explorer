@@ -1,11 +1,14 @@
-import { mkdirSync, watch } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { extname, join, normalize, sep } from 'node:path';
+import { constants, mkdirSync, watch } from 'node:fs';
+import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
-import type { Bounds, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
+import type { Bounds, ConfigFile, ConfigState, LayerState, MapInfo, Result, Saved, Status, View } from '../core/api.ts';
+import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
+import { addCircle, editCircle, removeZone, type CircleEdit } from '../core/zones.ts';
+import { ConfigDir } from './configdir.ts';
 import { Busy, Garmin, GARMIN, KeyRejected, Offline } from './garmin.ts';
 import { KeyFile } from './key.ts';
-import { Maps } from './maps.ts';
+import { Maps, slug } from './maps.ts';
 import { Store } from './store.ts';
 import { Sync } from './sync.ts';
 
@@ -29,18 +32,21 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'trail', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
-const MAP_HOSTS = 'https://tiles.openfreemap.org https://*.tile.opentopomap.org https://www.ign.es';
-const CSP = [
-  "default-src 'none'",
-  // Hot reload adds an inline script and a socket. Never in the packaged app.
-  `script-src 'self'${devServer ? " 'unsafe-inline'" : ''}`,
-  "worker-src 'self' blob:",
-  "style-src 'self' 'unsafe-inline'",
-  `img-src 'self' trail: data: blob: ${MAP_HOSTS}`,
-  `connect-src 'self' trail: blob: ${MAP_HOSTS}${devServer ? ` ${devServer.replace('http', 'ws')}` : ''}`,
-  "base-uri 'none'",
-  "form-action 'none'",
-].join('; ');
+/** The window may only load from the app itself and the web maps named in the config. */
+const csp = (layers: LayerDef[]) => {
+  const hosts = mapOrigins(layers).join(' ');
+  return [
+    "default-src 'none'",
+    // Hot reload adds an inline script and a socket. Never in the packaged app.
+    `script-src 'self'${devServer ? " 'unsafe-inline'" : ''}`,
+    "worker-src 'self' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' trail: data: blob: ${hosts}`,
+    `connect-src 'self' trail: blob: ${hosts}${devServer ? ` ${devServer.replace('http', 'ws')}` : ''}`,
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
+};
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.png': 'image/png', '.pbf': 'application/x-protobuf', '.svg': 'image/svg+xml',
@@ -53,8 +59,6 @@ function start() {
   const ridesDir = join(data, 'rides');
   const store = new Store(join(data, 'trail-explorer.db'));
   const keyFile = new KeyFile(join(data, 'key.bin'), { allowPlain: test.data !== undefined });
-  const maps = new Maps(join(data, 'maps'));
-  for (const m of store.maps()) maps.register(m.id, m.file);
 
   let win: BrowserWindow | null = null;
   let hasKey = false;
@@ -91,7 +95,15 @@ function start() {
 
   // --- heatmap --------------------------------------------------------------
   let version = store.get<number>('heatmapVersion') ?? 0;
+  /** Everything in the config that changes the heatmap. When it changes, the heatmap is drawn again. */
+  const heatKey = () => {
+    const { bands, radius, angle, step } = config.heatmap;
+    const zones = config.zones.map((z) => (z.kind === 'circle' ? [z.center, z.radius] : z.polygons));
+    return JSON.stringify({ zones, bands: bands.map((b) => b.from), radius, angle, step });
+  };
   async function buildHeatmap() {
+    // Never draw without knowing every zone: the heatmap would show what they hide.
+    if (zonesBlocked()) return;
     if (building) {
       buildAgain = true;
       return;
@@ -101,10 +113,16 @@ function start() {
     try {
       do {
         buildAgain = false;
-        const out = await runJob<{ json: string; focus: Bounds | null }>('heatmap', store.tracks());
+        if (zonesBlocked()) break;
+        const key = heatKey();
+        const { bands, radius, angle, step } = config.heatmap;
+        const out = await runJob<{ json: string; focus: Bounds | null }>('heatmap', {
+          tracks: store.tracks(), zones: config.zones, options: { radius, angle, step, bands: bands.map((b) => b.from) },
+        });
         await writeFile(`${heatFile}.part`, out.json);
         await rename(`${heatFile}.part`, heatFile);
         store.set('focus', out.focus);
+        store.set('heatmapKey', key);
         store.set('heatmapVersion', ++version);
         changed();
       } while (buildAgain);
@@ -115,6 +133,156 @@ function start() {
       changed();
     }
   }
+
+  // --- config ---------------------------------------------------------------
+  // The config folder is the one place for how the map looks. The app reads it,
+  // writes it when something is changed in the window, and watches it for edits.
+  const envDir = process.env.TRAIL_CONFIG?.trim() || null;
+  const configPath = (): { dir: string; source: ConfigState['source'] } => {
+    if (envDir) return { dir: resolve(envDir), source: 'env' };
+    const chosen = store.get<string>('configDir');
+    return chosen ? { dir: chosen, source: 'chosen' } : { dir: join(data, 'config'), source: 'default' };
+  };
+  let where = configPath();
+  let cfgDir = new ConfigDir(where.dir);
+  const maps = new Maps(join(where.dir, 'maps'));
+  let config: Config = DEFAULTS;
+  let problems: Problem[] = [];
+  let mapInfos: Record<string, MapInfo> = {};
+  let stopWatching = () => {};
+  let configLoaded = false;
+  /** True until the config is read, and while any zones file has a problem. */
+  const zonesBlocked = () => !configLoaded || problems.some((p) => p.file.startsWith('zones/'));
+
+  const configState = (): ConfigState => ({ config, problems, dir: cfgDir.dir, source: where.source, maps: mapInfos });
+  const sendConfig = () => {
+    if (win && !win.isDestroyed()) win.webContents.send('trail:config', configState());
+  };
+
+  /** What a map file holds. Cached, since reading a big map's real area takes a while. */
+  async function mapInfo(file: string): Promise<Omit<MapInfo, 'id' | 'name'>> {
+    const full = join(cfgDir.dir, 'maps', basename(file));
+    const st = await stat(full);
+    const key = `${full}:${st.size}:${st.mtimeMs}`;
+    const known = store.mapInfo(key);
+    if (known) return known;
+    const info = await maps.inspect(file);
+    store.saveMapInfo(key, info);
+    return info;
+  }
+
+  async function reloadConfig() {
+    const r = await cfgDir.load();
+    const found = [...r.problems];
+    const infos: Record<string, MapInfo> = {};
+    for (const l of r.config.layers) {
+      if (l.type !== 'file') continue;
+      try {
+        infos[l.id] = { id: l.id, name: l.name, ...(await mapInfo(l.file)) };
+        maps.register(l.id, l.file);
+      } catch (e) {
+        const gone = (e as NodeJS.ErrnoException).code === 'ENOENT';
+        found.push({ file: 'layers.json', message: `Layer "${l.id}": ${l.file} ${gone ? 'is not in the folder' : `could not be read. ${(e as Error).message}`}. The layer is not shown.` });
+      }
+    }
+    for (const id of maps.ids()) if (!infos[id]) maps.forget(id);
+    const before = mapOrigins(config.layers).join(' ');
+    if (found.some((p) => p.file.startsWith('zones/'))) {
+      found.push({ file: 'zones/', message: 'The heatmap is not redrawn until the zones files have no problems, so nothing they should hide can show.' });
+    }
+    config = r.config;
+    problems = found;
+    mapInfos = infos;
+    configLoaded = true;
+    if (heatKey() !== store.get<string>('heatmapKey')) void buildHeatmap();
+    // New web maps need a new security policy, which needs a fresh page.
+    if (win && !win.isDestroyed() && mapOrigins(config.layers).join(' ') !== before) win.webContents.reload();
+    else sendConfig();
+  }
+  // One reload at a time, in order.
+  let loading: Promise<void> = Promise.resolve();
+  const reload = () => (loading = loading.then(reloadConfig).catch((e) => console.error('Config reload failed:', e)));
+
+  /** Layer state saved before the config folder existed: order, on and opacity. */
+  const oldLayers = () => store.get<LayerState[]>('layers');
+  function applyOld(layers: LayerDef[], old: LayerState[] | null, ids: Record<string, string> = {}): LayerDef[] {
+    if (!old) return layers;
+    const order = old.map((o) => ids[o.id] ?? o.id);
+    const out = layers.map((l) => {
+      const o = old.find((x) => (ids[x.id] ?? x.id) === l.id);
+      return o ? { ...l, on: o.on, opacity: Math.max(0.05, Math.min(1, o.opacity)) } : l;
+    });
+    const rank = (l: LayerDef) => (order.includes(l.id) ? order.indexOf(l.id) : order.length);
+    return out.map((l, i) => ({ l, i })).sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i).map((x) => x.l);
+  }
+
+  /** Moves maps added by earlier versions from the data folder into the config folder. */
+  async function moveOldMaps() {
+    const old = store.oldMaps();
+    const saved = oldLayers();
+    if (!old.length) {
+      if (saved) store.set('layers', null);
+      return;
+    }
+    const { config: c } = await cfgDir.load();
+    let layers = [...c.layers];
+    const ids: Record<string, string> = {};
+    for (const m of old) {
+      const src = join(data, 'maps', basename(m.file));
+      const ext = extname(m.file);
+      const stem = slug(m.info.name);
+      let id = stem;
+      const taken = async (x: string) => layers.some((l) => l.id === x) || (await stat(join(cfgDir.dir, 'maps', `${x}${ext}`)).then(() => true, () => false));
+      for (let n = 2; await taken(id); n++) id = `${stem}-${n}`;
+      try {
+        await copyFile(src, join(cfgDir.dir, 'maps', `${id}${ext}`), constants.COPYFILE_FICLONE);
+      } catch (e) {
+        console.error('Could not move map', m.info.name, e);
+        continue;
+      }
+      ids[m.id] = id;
+      const at = layers.findIndex((l) => l.type === 'heatmap') + 1;
+      layers.splice(at, 0, { id, type: 'file', name: m.info.name.slice(0, 100) || 'Map', file: `maps/${id}${ext}`, on: true, opacity: 1 });
+    }
+    layers = applyOld(layers, saved, ids);
+    await cfgDir.write('layers.json', fileText('layers.json', { ...c, layers }, await cfgDir.read('layers.json')));
+    for (const m of old) {
+      if (!ids[m.id]) continue;
+      store.forgetOldMap(m.id);
+      await rm(join(data, 'maps', basename(m.file)), { force: true });
+    }
+    store.set('layers', null);
+  }
+
+  /** Opens the config folder, making it first if it is new. */
+  async function openConfig() {
+    stopWatching();
+    where = configPath();
+    cfgDir = new ConfigDir(where.dir);
+    await maps.setDir(join(where.dir, 'maps'));
+    mapInfos = {};
+    if (!(await cfgDir.exists())) await cfgDir.create({ ...DEFAULTS, layers: applyOld(DEFAULTS.layers, oldLayers()) });
+    await moveOldMaps();
+    await reload();
+    stopWatching = cfgDir.watch(() => void reload());
+  }
+
+  /** Writes layers.json with new layers, keeping its comments. */
+  async function writeLayers(layers: LayerDef[]) {
+    await cfgDir.write('layers.json', fileText('layers.json', { ...config, layers }, await cfgDir.read('layers.json')));
+    await reload();
+  }
+  const freeId = (want: string) => {
+    let id = want;
+    for (let n = 2; config.layers.some((l) => l.id === id); n++) id = `${want}-${n}`;
+    return id;
+  };
+  /** "zones/zones.geojson#3" to its position, for zones the app may change. */
+  const appZone = (id: unknown): number => {
+    const z = config.zones.find((x) => x.id === id);
+    if (!z || z.file !== APP_ZONES) throw new Error('That zone is in a file the app does not change. Edit the file instead.');
+    return z.index;
+  };
 
   // --- status ---------------------------------------------------------------
   const garmin = new Garmin(async () => {
@@ -215,37 +383,102 @@ function start() {
     await buildHeatmap();
     changed();
   }));
-  handle('listMaps', () => store.maps().map((m) => m.info));
+  handle('getConfig', configState);
+  handle('saveConfig', (file: unknown, value: unknown) => result(async () => {
+    if (!FILES.includes(file as ConfigFile)) throw new Error('Unknown config file.');
+    const f = file as ConfigFile;
+    const bad = checkFile(f, value);
+    if (bad.length) throw new Error(bad.map((p) => p.message).join(' '));
+    // Read back the same way a hand-edited file would be, so both end up alike.
+    const next = parseConfig({ [f]: JSON.stringify(value) }).config;
+    await cfgDir.write(f, fileText(f, { ...config, map: next.map, heatmap: next.heatmap, layers: f === 'layers.json' ? next.layers : config.layers }, await cfgDir.read(f)));
+    await reload();
+  }));
+  handle('saveLayers', (ls: unknown) => result(async () => {
+    if (!Array.isArray(ls) || ls.length > 500) throw new Error('Unknown layers.');
+    const state = new Map<string, LayerState>();
+    for (const l of ls) if (isId(l?.id) && typeof l.on === 'boolean' && Number.isFinite(l.opacity)) state.set(l.id, l);
+    const order = [...state.keys()];
+    const rank = (l: LayerDef) => (state.has(l.id) ? order.indexOf(l.id) : order.length);
+    const layers = config.layers
+      .map((l) => {
+        const st = state.get(l.id);
+        return st ? { ...l, on: st.on, opacity: Math.max(0.05, Math.min(1, Math.round(st.opacity * 100) / 100)) } : l;
+      })
+      .map((l, i) => ({ l, i }))
+      .sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i)
+      .map((x) => x.l);
+    await writeLayers(layers);
+  }));
   const addMap = (path: unknown) => result(async (): Promise<MapInfo> => {
     if (typeof path !== 'string' || !path) throw new Error('That file could not be opened.');
     const { file, info } = await maps.add(path);
-    store.saveMap(file, info);
-    return info;
+    const id = freeId(info.id);
+    if (id !== info.id) {
+      maps.forget(info.id);
+      maps.register(id, file);
+    }
+    const st = await stat(join(cfgDir.dir, 'maps', file));
+    const { id: _i, name: _n, ...meta } = info;
+    store.saveMapInfo(`${join(cfgDir.dir, 'maps', file)}:${st.size}:${st.mtimeMs}`, meta);
+    const layers = [...config.layers];
+    layers.splice(layers.findIndex((l) => l.type === 'heatmap') + 1, 0, { id, type: 'file', name: info.name, file: `maps/${file}`, on: true, opacity: 1 });
+    await writeLayers(layers);
+    return { ...info, id };
   });
   handle('addMapPath', addMap);
   handle('pickMap', async (): Promise<Result<MapInfo | null>> => {
     const r = await dialog.showOpenDialog(win!, { title: 'Add map', properties: ['openFile'], filters: [{ name: 'Maps', extensions: ['pmtiles', 'mbtiles', 'zip'] }] });
     return r.canceled || !r.filePaths[0] ? { ok: true, value: null } : addMap(r.filePaths[0]);
   });
-  handle('renameMap', (id: unknown, name: unknown) => result(() => {
-    const m = store.maps().find((x) => x.id === id);
+  handle('renameMap', (id: unknown, name: unknown) => result(async () => {
     const n = typeof name === 'string' ? name.trim().slice(0, 100) : '';
-    if (!m || !n) throw new Error('A map needs a name.');
-    store.saveMap(m.file, { ...m.info, name: n });
+    if (!n) throw new Error('A map needs a name.');
+    if (!config.layers.some((l) => l.id === id)) throw new Error('Unknown map.');
+    await writeLayers(config.layers.map((l) => (l.id === id ? { ...l, name: n } : l)));
   }));
   handle('removeMap', (id: unknown) => result(async () => {
-    if (!isId(id)) throw new Error('Unknown map.');
-    store.removeMap(id);
-    await maps.remove(id);
+    const l = config.layers.find((x) => x.id === id);
+    if (!l || l.type !== 'file') throw new Error('Unknown map.');
+    await writeLayers(config.layers.filter((x) => x !== l));
+    // Keep the file if another layer still uses it.
+    if (config.layers.some((x) => x.type === 'file' && x.file === l.file)) maps.forget(l.id);
+    else await maps.remove(l.id).then(() => rm(join(cfgDir.dir, l.file), { force: true }));
   }));
-  handle('getSaved', (): Saved => ({ layers: store.get('layers'), view: store.get('view'), focus: store.get('focus') }));
-  handle('saveLayers', (ls: unknown) => {
-    if (!Array.isArray(ls) || ls.length > 500) return;
-    store.set('layers', ls.filter((l): l is LayerState => isId(l?.id) && typeof l.on === 'boolean' && Number.isFinite(l.opacity))
-      .map((l) => ({ id: l.id, on: l.on, opacity: Math.max(0, Math.min(1, l.opacity)) })));
-  });
+  handle('addZone', (z: Required<CircleEdit>) => result(async () => {
+    await cfgDir.write(APP_ZONES, addCircle(await cfgDir.read(APP_ZONES), { name: z?.name, center: z?.center, radius: z?.radius }));
+    await reload();
+  }));
+  handle('editZone', (id: unknown, e: CircleEdit) => result(async () => {
+    const at = appZone(id);
+    await cfgDir.write(APP_ZONES, editCircle(await cfgDir.read(APP_ZONES), at, { name: e?.name, center: e?.center, radius: e?.radius }));
+    await reload();
+  }));
+  handle('removeZone', (id: unknown) => result(async () => {
+    const at = appZone(id);
+    await cfgDir.write(APP_ZONES, removeZone(await cfgDir.read(APP_ZONES), at));
+    await reload();
+  }));
+  handle('pickConfigDir', () => result(async () => {
+    if (envDir) throw new Error('The TRAIL_CONFIG variable chooses the config folder, so it cannot be changed here.');
+    const r = await dialog.showOpenDialog(win!, { title: 'Use config folder', properties: ['openDirectory', 'createDirectory'] });
+    if (r.canceled || !r.filePaths[0]) return false;
+    store.set('configDir', r.filePaths[0]);
+    await openConfig();
+    return true;
+  }));
+  handle('useDefaultConfigDir', () => result(async () => {
+    if (envDir) throw new Error('The TRAIL_CONFIG variable chooses the config folder, so it cannot be changed here.');
+    store.set('configDir', null);
+    await openConfig();
+  }));
+  handle('openConfigDir', () => void shell.openPath(cfgDir.dir));
+  handle('getSaved', (): Saved => ({ view: store.get('view'), focus: store.get('focus'), showZones: store.get<boolean>('showZones') ?? true }));
   handle('saveView', (v: View) => {
     if (Array.isArray(v?.center) && v.center.length === 2 && [...v.center, v.zoom].every(Number.isFinite)) store.set('view', { center: v.center, zoom: v.zoom });
+  });
+  handle('saveShowZones', (on: unknown) => {
+    if (typeof on === 'boolean') store.set('showZones', on);
   });
 
   // --- trail:// ---------------------------------------------------------------
@@ -273,13 +506,13 @@ function start() {
     if (u.host === 'app' && devServer) {
       try {
         const r = await net.fetch(`${devServer}${u.pathname}${u.search}`, { headers: { Accept: req.headers.get('accept') ?? '*/*' }, bypassCustomProtocolHandlers: true });
-        const headers = new Headers({ 'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream', 'Content-Security-Policy': CSP, 'Cache-Control': 'no-store' });
+        const headers = new Headers({ 'Content-Type': r.headers.get('content-type') ?? 'application/octet-stream', 'Content-Security-Policy': csp(config.layers), 'Cache-Control': 'no-store' });
         return new Response(await r.arrayBuffer(), { status: r.status, headers });
       } catch {
         return none(502);
       }
     }
-    if (u.host === 'app') return file(uiDir, path || 'index.html', { 'Content-Security-Policy': CSP, 'Referrer-Policy': 'no-referrer' });
+    if (u.host === 'app') return file(uiDir, path || 'index.html', { 'Content-Security-Policy': csp(config.layers), 'Referrer-Policy': 'no-referrer' });
     if (u.host === 'styles' || u.host === 'sprites') return file(join(resources, u.host), path);
     if (u.host === 'heatmap') {
       try {
@@ -302,7 +535,7 @@ function start() {
       return ok(new Uint8Array(0), 'application/x-protobuf');
     }
     if (u.host === 'maps') {
-      const m = path.match(/^([\w-]+)\/(\d{1,2})\/(\d{1,9})\/(\d{1,9})$/);
+      const m = path.match(/^([a-z0-9_-]{1,64})\/(\d{1,2})\/(\d{1,9})\/(\d{1,9})$/);
       if (!m) return none(400);
       try {
         const t = await maps.tile(m[1]!, Number(m[2]), Number(m[3]), Number(m[4]));
@@ -350,6 +583,7 @@ function start() {
     if (quitting) return;
     e.preventDefault();
     quitting = true;
+    stopWatching();
     void Promise.race([sync.stop(), new Promise((r) => setTimeout(r, 2000))]).then(async () => {
       if (timer) clearTimeout(timer);
       await maps.close();
@@ -359,12 +593,12 @@ function start() {
     });
   });
 
-  void keyFile.exists().then((has) => {
+  void Promise.all([keyFile.exists(), openConfig().catch((e) => console.error('Could not open the config folder:', e))]).then(([has]) => {
     hasKey = has;
     openWindow();
     if (has) sync.start();
     // In development, redraw on every start so heatmap changes show.
-    if ((!version || devServer) && store.counts().done) void buildHeatmap();
+    if ((!version || devServer) && store.counts().done && !building) void buildHeatmap();
     if (devServer) {
       let t: NodeJS.Timeout | undefined;
       watch(resources, { recursive: true }, () => {

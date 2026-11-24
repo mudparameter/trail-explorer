@@ -110,7 +110,7 @@ test('cleaning drops jumps and splits gaps', () => {
   assert.equal(tr.length, 2);
   assert.deepEqual(unpackTrack(packTrack(tr)), tr);
 });
-test('bands', () => assert.deepEqual([1, 2, 3, 4, 7, 8, 15, 16, 39, 40, 99].map(bandOf), [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]));
+test('bands', () => assert.deepEqual([1, 2, 3, 4, 7, 8, 15, 16, 39, 40, 99].map((n) => bandOf(n)), [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]));
 test('speed', () => {
   seed = 21;
   const rides = Array.from({ length: 200 }, (_, i) => ride(Array.from({ length: 400 }, (_, k) => [k * 100, 3000 * Math.sin(k / 30 + (i % 10))]), 4));

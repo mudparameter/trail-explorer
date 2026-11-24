@@ -1,5 +1,7 @@
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
+import type { Config, FILES, Problem } from './config.ts';
+import type { CircleEdit } from './zones.ts';
 
 export interface SyncStatus {
   state: 'idle' | 'listing' | 'downloading' | 'waiting' | 'offline' | 'key-rejected' | 'error';
@@ -44,11 +46,22 @@ export interface View {
   zoom: number;
 }
 export interface Saved {
-  /** Top first. */
-  layers: LayerState[] | null;
+  /** Where the map was left. */
   view: View | null;
   focus: Bounds | null;
+  showZones: boolean;
 }
+export interface ConfigState {
+  config: Config;
+  problems: Problem[];
+  /** The config folder in use. */
+  dir: string;
+  /** Why this folder: the default one, one picked in Settings, or the TRAIL_CONFIG variable. */
+  source: 'default' | 'chosen' | 'env';
+  /** Map files that could be read, by layer id. */
+  maps: Record<string, MapInfo>;
+}
+export type ConfigFile = (typeof FILES)[number];
 export type Result<T = void> = { ok: true; value: T } | { ok: false; error: string };
 
 export interface TrailApi {
@@ -59,13 +72,26 @@ export interface TrailApi {
   removeKey(): Promise<Result>;
   syncNow(): Promise<Result>;
   deleteRides(): Promise<Result>;
-  listMaps(): Promise<MapInfo[]>;
-  /** Opens a file picker. Null when cancelled. */
+  getConfig(): Promise<ConfigState>;
+  onConfig(fn: (c: ConfigState) => void): () => void;
+  /** Checks and writes one config file. Refused, with the reasons, when anything in it is wrong. */
+  saveConfig(file: ConfigFile, value: unknown): Promise<Result>;
+  /** Saves the order, visibility and opacity of the layers, top first. */
+  saveLayers(layers: LayerState[]): Promise<Result>;
+  /** Opens a file picker and adds the map to the config folder. Null when cancelled. */
   pickMap(): Promise<Result<MapInfo | null>>;
   addDroppedMap(file: File): Promise<Result<MapInfo>>;
   renameMap(id: string, name: string): Promise<Result>;
+  /** Removes a map layer and deletes its file from the config folder. */
   removeMap(id: string): Promise<Result>;
+  addZone(zone: Required<CircleEdit>): Promise<Result>;
+  editZone(id: string, edit: CircleEdit): Promise<Result>;
+  removeZone(id: string): Promise<Result>;
+  /** Asks for a folder to use as the config folder. False when cancelled. */
+  pickConfigDir(): Promise<Result<boolean>>;
+  useDefaultConfigDir(): Promise<Result>;
+  openConfigDir(): Promise<void>;
   getSaved(): Promise<Saved>;
-  saveLayers(layers: LayerState[]): Promise<void>;
   saveView(view: View): Promise<void>;
+  saveShowZones(on: boolean): Promise<void>;
 }

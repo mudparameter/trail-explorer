@@ -30,3 +30,29 @@ progress { width: 100%; }
 .page { max-width: 620px; padding: 20px 24px; overflow-y: auto; }
 .form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; max-width: 420px; margin: 10px 0; }
 .form label { display: flex; flex-direction: column; gap: 3px; width: 100%; }
+.page.wide { max-width: 760px; }
+code { font: 12px ui-monospace, monospace; background: #f0f0ee; padding: 0 3px; }
+.path { overflow-wrap: anywhere; }
+.section { margin-bottom: 8px; }
+.fields { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.fields label, .form .fields label { width: auto; flex: 1 1 140px; }
+.form input[type='number'] { width: 100%; }
+.form textarea { width: 100%; font: 12px ui-monospace, monospace; }
+.colour .row { flex-wrap: nowrap; }
+.colour input[type='color'] { width: 36px; height: 24px; padding: 0; border: 1px solid #999; flex: none; }
+.colour input:not([type='color']) { width: 80px; flex: none; }
+.bands { border-collapse: collapse; }
+.bands th { text-align: left; font-weight: 600; padding: 2px 8px 2px 0; }
+.bands td { padding: 2px 8px 2px 0; vertical-align: middle; }
+.bands input[type='number'] { width: 70px; }
+fieldset.layer { width: 100%; border: 1px solid #ccc; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+fieldset.layer label { width: 100%; }
+.problems { background: #fff0f0; border: 1px solid #e3a0a0; padding: 6px 10px; margin: 8px 0; }
+.problems ul { list-style: disc; padding-left: 18px; }
+ul.error { list-style: disc; padding-left: 18px; }
+.zone-edit { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.zone-edit label { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.zone-edit input { width: 110px; }
+details summary { cursor: pointer; font-weight: 600; }
+.page.wide .form { max-width: none; }
+.fields { width: 100%; }

@@ -1,0 +1,15 @@
+{
+  "//": "Colours by number of passes, lowest first. \"label\" is optional. radius, angle and step change how rides are matched. See README.md.",
+  "bands": [
+    { "from": 1, "color": "#2f6bff" },
+    { "from": 2, "color": "#8a3ffc" },
+    { "from": 4, "color": "#e0369a" },
+    { "from": 8, "color": "#f0282d" },
+    { "from": 16, "color": "#ffe14d" },
+    { "from": 40, "color": "#ffffff" }
+  ],
+  "outline": "#14141e",
+  "radius": 15,
+  "angle": 35,
+  "step": 10
+}

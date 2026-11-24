@@ -1,0 +1,38 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Example: a drawn area"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -0.43,
+       39.7
+      ],
+      [
+       -0.42,
+       39.7
+      ],
+      [
+       -0.42,
+       39.71
+      ],
+      [
+       -0.43,
+       39.71
+      ],
+      [
+       -0.43,
+       39.7
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

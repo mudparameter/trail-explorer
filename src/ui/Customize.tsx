@@ -1,0 +1,266 @@
+// The configurer: edits the files in the config folder, checking them the same
+// way the app does when it reads them, so what is saved always loads.
+import { useState, type ReactNode } from 'react';
+import type { ConfigFile, ConfigState, View } from '../core/api.ts';
+import { bandLabels, checkFile, DEFAULTS, type Band, type HeatmapConfig, type LayerDef, type MapConfig } from '../core/config.ts';
+import { trail } from './api.ts';
+
+interface Props {
+  cfg: ConfigState;
+  /** Where the map is now. */
+  view: View | null;
+  showOnMap(v: View): void;
+}
+
+export function Customize({ cfg, view, showOnMap }: Props) {
+  const { config } = cfg;
+  return (
+    <main className="page wide">
+      <h1>Customize</h1>
+      <p>
+        Everything here is saved as plain files in the config folder, so you can also edit them by hand, keep them in a
+        private git repository, or copy them to another computer. Changes to the files show here as soon as they are saved.
+      </p>
+      <Folder cfg={cfg} />
+      {/* Each section starts again from the file whenever the file changes. */}
+      <MapSection key={JSON.stringify(config.map)} value={config.map} view={view} showOnMap={showOnMap} />
+      <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />
+      <LayersSection key={JSON.stringify(config.layers)} value={config.layers} cfg={cfg} />
+      <h2>Excluded zones</h2>
+      <p>
+        Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
+        <code> .geojson</code> file in the <code>zones</code> folder is used too, so you can draw shapes in a tool such as geojson.io.
+      </p>
+    </main>
+  );
+}
+
+function Folder({ cfg }: { cfg: ConfigState }) {
+  const [error, setError] = useState<string | null>(null);
+  const run = async (r: Promise<{ ok: boolean; error?: string }>) => {
+    const x = await r;
+    setError(x.ok ? null : (x.error ?? 'Something went wrong.'));
+  };
+  return (
+    <>
+      <h2>Config folder</h2>
+      <p><code className="path">{cfg.dir}</code></p>
+      <p className="small">
+        {cfg.source === 'env' ? 'Chosen by the TRAIL_CONFIG variable.' : cfg.source === 'chosen' ? 'A folder you chose.' : 'The default folder.'}
+        {' '}Keep it private: zones show where you live.
+      </p>
+      <div className="row">
+        <button onClick={() => void trail.openConfigDir()}>Open folder</button>
+        {cfg.source !== 'env' && <button onClick={() => void run(trail.pickConfigDir())}>Use another folder…</button>}
+        {cfg.source === 'chosen' && <button onClick={() => void run(trail.useDefaultConfigDir())}>Use the default folder</button>}
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+      {cfg.problems.length > 0 && (
+        <div className="problems" role="alert">
+          <p><strong>Problems found in the files.</strong> The app uses the default for each of these until it is fixed.</p>
+          <ul>{cfg.problems.map((p, i) => <li key={i}><code>{p.file}</code> {p.message}</li>)}</ul>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A section that edits one file: a draft, checked as you type, with Save, Undo and Defaults. */
+function Section<T>({ title, file, value, defaults, toFile, intro, children }: {
+  title: string;
+  file: ConfigFile;
+  value: T;
+  defaults: T;
+  toFile(v: T): unknown;
+  intro?: ReactNode;
+  children(draft: T, set: (v: T) => void): ReactNode;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(value);
+  const problems = checkFile(file, toFile(draft));
+  const save = async () => {
+    setSaving(true);
+    const r = await trail.saveConfig(file, toFile(draft));
+    setSaving(false);
+    setError(r.ok ? null : r.error);
+  };
+  return (
+    <section className="section">
+      <h2>{title} <span className="small">({file})</span></h2>
+      {intro}
+      {children(draft, (v) => { setDraft(v); setError(null); })}
+      {problems.length > 0 && <ul className="error">{problems.map((p, i) => <li key={i}>{p.message}</li>)}</ul>}
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="row">
+        <button disabled={!dirty || problems.length > 0 || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button>
+        <button disabled={!dirty} onClick={() => setDraft(value)}>Undo changes</button>
+        <button disabled={JSON.stringify(draft) === JSON.stringify(defaults)} onClick={() => setDraft(defaults)}>Use defaults</button>
+        {dirty && <span className="small">Not saved yet</span>}
+      </div>
+    </section>
+  );
+}
+
+/** A number box that keeps what is typed, even half-typed, and reports NaN when empty. */
+function Num({ label, value, set, min, max, step = 1, hint }: { label: string; value: number; set(v: number): void; min: number; max: number; step?: number; hint?: string }) {
+  return (
+    <label>
+      {label}
+      <input type="number" value={Number.isFinite(value) ? value : ''} min={min} max={max} step={step} onChange={(e) => set(e.target.value === '' ? NaN : Number(e.target.value))} />
+      {hint && <span className="small">{hint}</span>}
+    </label>
+  );
+}
+/** `bare` hides the label, for a table that already has a heading. */
+function Colour({ label, value, set, bare }: { label: string; value: string; set(v: string): void; bare?: boolean }) {
+  // A colour picker needs six digits.
+  const six = /^#[0-9a-f]{3}$/i.test(value) ? `#${[...value.slice(1)].map((c) => c + c).join('')}` : /^#[0-9a-f]{6}$/i.test(value) ? value : '#000000';
+  return (
+    <label className="colour">
+      {!bare && label}
+      <span className="row">
+        <input type="color" value={six} aria-label={`${label} picker`} onChange={(e) => set(e.target.value)} />
+        <input value={value} maxLength={7} aria-label={label} onChange={(e) => set(e.target.value.trim())} />
+      </span>
+    </label>
+  );
+}
+
+function MapSection({ value, view, showOnMap }: { value: MapConfig; view: View | null; showOnMap(v: View): void }) {
+  const round = (v: View): View => ({ center: [Math.round(v.center[0] * 1e5) / 1e5, Math.round(v.center[1] * 1e5) / 1e5], zoom: Math.round(v.zoom * 100) / 100 });
+  return (
+    <Section title="Map" file="map.json" value={value} defaults={DEFAULTS.map} toFile={(v) => v}>
+      {(d, set) => (
+        <div className="form">
+          <div>
+            <strong>Start view</strong>
+            <p className="small">Where the map opens the first time, and on a website. After that the app remembers where you left it.</p>
+            {d.view ? (
+              <div className="fields">
+                <Num label="Longitude" value={d.view.center[0]} min={-180} max={180} step={0.0001} set={(x) => set({ ...d, view: { ...d.view!, center: [x, d.view!.center[1]] } })} />
+                <Num label="Latitude" value={d.view.center[1]} min={-85} max={85} step={0.0001} set={(x) => set({ ...d, view: { ...d.view!, center: [d.view!.center[0], x] } })} />
+                <Num label="Zoom" value={d.view.zoom} min={0} max={22} step={0.1} set={(x) => set({ ...d, view: { ...d.view!, zoom: x } })} />
+              </div>
+            ) : (
+              <p>Fits the map to your rides.</p>
+            )}
+            <div className="row">
+              <button disabled={!view} onClick={() => view && set({ ...d, view: round(view) })}>Use the current map view</button>
+              {d.view && <button onClick={() => set({ ...d, view: null })}>Fit to my rides instead</button>}
+              {d.view && <button onClick={() => showOnMap(d.view!)}>Show on the map</button>}
+            </div>
+          </div>
+          <div className="fields">
+            <Num label="Furthest out (zoom)" value={d.minZoom} min={0} max={22} step={0.5} set={(x) => set({ ...d, minZoom: x })} hint="0 shows the whole world" />
+            <Num label="Furthest in (zoom)" value={d.maxZoom} min={0} max={22} step={0.5} set={(x) => set({ ...d, maxZoom: x })} hint="19 is street level" />
+          </div>
+          <Colour label="Background" value={d.background} set={(x) => set({ ...d, background: x })} />
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function HeatmapSection({ value }: { value: HeatmapConfig }) {
+  return (
+    <Section title="Heatmap colours" file="heatmap.json" value={value} defaults={DEFAULTS.heatmap} toFile={(v) => v}
+      intro={<p className="small">Each band colours sections ridden at least “from” times, up to the next band. The first band must start at 1.</p>}>
+      {(d, set) => {
+        const labels = bandLabels(d.bands.map((b) => ({ ...b, label: undefined })));
+        const band = (i: number, b: Partial<Band>) => set({ ...d, bands: d.bands.map((x, j) => (j === i ? { ...x, ...b } : x)) });
+        return (
+          <div className="form">
+            <table className="bands">
+              <thead><tr><th>From</th><th>Colour</th><th>Legend text</th><th /></tr></thead>
+              <tbody>
+                {d.bands.map((b, i) => (
+                  <tr key={i}>
+                    <td><input type="number" min={1} value={Number.isFinite(b.from) ? b.from : ''} aria-label={`Band ${i + 1} from`} onChange={(e) => band(i, { from: e.target.value === '' ? NaN : Number(e.target.value) })} /></td>
+                    <td><Colour bare label={`Band ${i + 1} colour`} value={b.color} set={(c) => band(i, { color: c })} /></td>
+                    <td><input value={b.label ?? ''} placeholder={labels[i]} maxLength={40} aria-label={`Band ${i + 1} legend text`} onChange={(e) => band(i, { label: e.target.value || undefined })} /></td>
+                    <td><button aria-label={`Remove band ${i + 1}`} disabled={d.bands.length === 1} onClick={() => set({ ...d, bands: d.bands.filter((_, j) => j !== i) })}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button disabled={d.bands.length >= 12} onClick={() => {
+              const last = d.bands.at(-1)!;
+              set({ ...d, bands: [...d.bands, { from: Number.isFinite(last.from) ? last.from * 2 : 2, color: '#000000' }] });
+            }}>Add band</button>
+            <Colour label="Outline" value={d.outline} set={(x) => set({ ...d, outline: x })} />
+            <div>
+              <strong>Preview</strong>
+              <ul className="legend">
+                {d.bands.map((b, i) => <li key={i}><span style={{ background: b.color, borderColor: d.outline }} />{b.label || labels[i]}</li>)}
+              </ul>
+            </div>
+            <details>
+              <summary>How rides are matched</summary>
+              <p className="small">These change how rides are joined into one network. Changing them redraws the heatmap.</p>
+              <div className="fields">
+                <Num label="Join distance (m)" value={d.radius} min={3} max={100} set={(x) => set({ ...d, radius: x })} hint="Rides this close share a section" />
+                <Num label="Direction difference (°)" value={d.angle} min={5} max={90} set={(x) => set({ ...d, angle: x })} hint="More than this is a different trail" />
+                <Num label="Detail (m)" value={d.step} min={2} max={50} set={(x) => set({ ...d, step: x })} hint="Length of the pieces trails are made of" />
+              </div>
+            </details>
+          </div>
+        );
+      }}
+    </Section>
+  );
+}
+
+function LayersSection({ value, cfg }: { value: LayerDef[]; cfg: ConfigState }) {
+  return (
+    <Section title="Layers" file="layers.json" value={value} defaults={DEFAULTS.layers} toFile={(v) => ({ layers: v })}
+      intro={<p className="small">Turn layers on and off, reorder them and set opacity in the sidebar. Here you can rename them and add web maps. Map files are added with Add map in the sidebar.</p>}>
+      {(d, set) => {
+        const layer = (i: number, l: Partial<LayerDef>) => set(d.map((x, j) => (j === i ? ({ ...x, ...l } as LayerDef) : x)));
+        const freeId = () => {
+          let id = 'web-map';
+          for (let n = 2; d.some((l) => l.id === id); n++) id = `web-map-${n}`;
+          return id;
+        };
+        return (
+          <div className="form">
+            {d.map((l, i) => (
+              <fieldset key={l.id} className="layer">
+                <legend>{l.name || l.id} <span className="small">{l.type === 'raster' ? 'web map' : l.type === 'file' ? `file ${l.file}` : l.type === 'heatmap' ? 'your rides' : 'OpenFreeMap'}</span></legend>
+                <div className="fields">
+                  <label>Name<input value={l.name} maxLength={100} onChange={(e) => layer(i, { name: e.target.value })} /></label>
+                  <label>Note<input value={l.note ?? ''} maxLength={100} placeholder="Shown after the name" onChange={(e) => layer(i, { note: e.target.value || undefined })} /></label>
+                </div>
+                {l.type === 'raster' && (
+                  <>
+                    <label>
+                      Tile addresses, one per line
+                      <textarea rows={Math.max(2, l.tiles.length)} value={l.tiles.join('\n')} spellCheck={false}
+                        placeholder="https://tiles.example.org/{z}/{x}/{y}.png"
+                        onChange={(e) => layer(i, { tiles: e.target.value.split('\n').map((t) => t.trim()).filter(Boolean) })} />
+                      <span className="small">Each needs {'{z}'}, {'{x}'} and {'{y}'}. List each server on its own line instead of using {'{s}'}.</span>
+                    </label>
+                    <label>Credit shown on the map<input value={l.attribution} maxLength={1000} onChange={(e) => layer(i, { attribution: e.target.value })} /></label>
+                    <div className="fields">
+                      <Num label="Lowest zoom" value={l.minzoom} min={0} max={22} set={(x) => layer(i, { minzoom: x })} />
+                      <Num label="Highest zoom" value={l.maxzoom} min={0} max={22} set={(x) => layer(i, { maxzoom: x })} />
+                    </div>
+                  </>
+                )}
+                {l.type === 'file' && !cfg.maps[l.id] && <p className="small error">The file is not in the maps folder.</p>}
+                {l.type !== 'heatmap' && <button onClick={() => set(d.filter((_, j) => j !== i))}>Remove layer</button>}
+                {l.type === 'file' && <span className="small"> The file stays in the maps folder.</span>}
+              </fieldset>
+            ))}
+            <button onClick={() => {
+              const at = d.findIndex((l) => l.type === 'heatmap') + 1;
+              const l: LayerDef = { id: freeId(), type: 'raster', name: 'Web map', on: true, opacity: 1, tiles: [], tileSize: 256, minzoom: 0, maxzoom: 19, attribution: '' };
+              set([...d.slice(0, at), l, ...d.slice(at)]);
+            }}>Add web map</button>
+          </div>
+        );
+      }}
+    </Section>
+  );
+}

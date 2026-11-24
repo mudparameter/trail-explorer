@@ -16,6 +16,7 @@ export class Store {
         distance REAL, status TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0, file TEXT, track BLOB);
       CREATE INDEX IF NOT EXISTS ride_status ON ride (status, started_at);
       CREATE TABLE IF NOT EXISTS map (id TEXT PRIMARY KEY, file TEXT NOT NULL, info TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS map_info (k TEXT PRIMARY KEY, info TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS setting (k TEXT PRIMARY KEY, v TEXT NOT NULL);
       PRAGMA user_version = 1;
     `);
@@ -83,14 +84,21 @@ export class Store {
     this.db.exec("DELETE FROM ride; DELETE FROM setting WHERE k IN ('lastSync', 'lastSyncStart', 'focus'); VACUUM;");
   }
 
-  maps(): { id: string; file: string; info: MapInfo }[] {
+  /** Maps added before the config folder existed. Only read to move them into it. */
+  oldMaps(): { id: string; file: string; info: MapInfo }[] {
     return this.db.prepare('SELECT id, file, info FROM map ORDER BY rowid').all()
       .map((r) => ({ id: String(r.id), file: String(r.file), info: JSON.parse(String(r.info)) as MapInfo }));
   }
-  saveMap(file: string, info: MapInfo) {
-    this.db.prepare('INSERT INTO map VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET info = excluded.info').run(info.id, file, JSON.stringify(info));
-  }
-  removeMap(id: string) {
+  forgetOldMap(id: string) {
     this.db.prepare('DELETE FROM map WHERE id = ?').run(id);
+  }
+
+  /** What a map file holds, remembered by its path, size and date, since finding out can be slow. */
+  mapInfo(key: string): Omit<MapInfo, 'id' | 'name'> | null {
+    const r = this.db.prepare('SELECT info FROM map_info WHERE k = ?').get(key);
+    return r ? JSON.parse(String(r.info)) : null;
+  }
+  saveMapInfo(key: string, info: Omit<MapInfo, 'id' | 'name'>) {
+    this.db.prepare('INSERT INTO map_info VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET info = excluded.info').run(key, JSON.stringify(info));
   }
 }

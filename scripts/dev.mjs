@@ -1,8 +1,9 @@
 // Starts the app with hot reload:  npm run dev
 //
-// The first time, it copies your rides and maps from the real app into a
-// separate development folder. The Garmin key is never copied.
-//   npm run dev -- --fresh-copy   copies them again
+// The first time, it copies your rides and config folder (maps and zones
+// included) from the real app into a separate development folder. The Garmin
+// key is never copied.
+//   npm run dev -- --fresh-copy   copies them again, replacing the dev copies
 import { spawn } from 'node:child_process';
 import { constants, cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -43,6 +44,12 @@ if (existsSync(join(real, db)) && (again || !existsSync(join(dev, db)))) {
   copy.close();
   if (existsSync(join(real, 'maps'))) cpSync(join(real, 'maps'), join(dev, 'maps'), { recursive: true, mode: constants.COPYFILE_FICLONE });
   console.log(`Copied ${n} rides into the development copy.`);
+}
+// The config folder holds the zones, so the dev copy hides the same places.
+if (existsSync(join(real, 'config')) && (again || !existsSync(join(dev, 'config')))) {
+  rmSync(join(dev, 'config'), { recursive: true, force: true });
+  cpSync(join(real, 'config'), join(dev, 'config'), { recursive: true, mode: constants.COPYFILE_FICLONE });
+  console.log('Copied the config folder into the development copy.');
 }
 
 const bin = join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js');

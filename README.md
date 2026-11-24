@@ -13,6 +13,8 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 - **Syncs from Garmin.** Uses your Garmin personal API key and picks up new rides on its own. It includes cycling activities with GPS and leaves out virtual and indoor rides.
 - **Map layers.** The world map (OpenFreeMap), a world topo map (OpenTopoMap) and a Spain topo map (IGN). You can switch each one on or off, reorder them and set how see-through they are.
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.
+- **Excluded zones.** Hide places such as around home: click the map to place a circle, or draw any shape in a GeoJSON file. Rides are cut where they enter a zone.
+- **Portable config.** Colors, start view, zoom limits, layers, offline maps and zones live in one folder of plain JSON files. Edit them in the app's Customize screen or by hand, and copy the folder to another computer.
 - **Private.** Rides stay on your computer. The Garmin key is encrypted with your system keychain and sent only to Garmin.
 
 ## Install
@@ -48,6 +50,30 @@ The first sync downloads every ride Garmin returns, which seems to be about the 
 2. Choose the format **PMTiles Shortbread** (MBTiles Shortbread works too) and enter your email address.
 3. When the link arrives, download the `.zip`, then use **Add map** in Trail Explorer or drop the file on the window. You don't need to unzip it.
 
+## Configuration
+
+Everything about how the map looks lives in one config folder:
+
+```
+config/
+  README.md        what every setting means
+  map.json         start view, zoom limits, background color
+  heatmap.json     color bands, outline, how rides are matched
+  layers.json      every layer, top first: your rides, web maps, offline map files
+  maps/            offline .pmtiles / .mbtiles files
+  zones/           excluded zones, as .geojson files
+```
+
+- **Where it is:** `~/.config/Trail Explorer/config` on Linux and `~/Library/Application Support/Trail Explorer/config` on macOS. Use **Customize → Use another folder…** to choose a different one, or set `TRAIL_CONFIG=/path/to/folder` before starting the app. For example, you can point it at a private git repository you sync between computers.
+- **Editing:** use the Customize screen, or edit the files by hand. The app watches the folder and picks up changes as soon as a file is saved.
+- **Mistakes:** every file and setting is optional. If a value is wrong, the app shows which file and setting, uses the default for just that setting, and keeps the rest.
+- **Comments:** any key starting with `//` is ignored, so `"//": "note to self"` works as a comment.
+- **Zones and privacy:** zones show where you live, so keep the folder private. If a zones file has a problem, the heatmap isn't redrawn until it's fixed, so nothing it should hide can show.
+
+[`config.example/`](config.example) has a complete example with every file. Its [README](config.example/README.md) documents every setting.
+
+Reading, checking and applying the config (`src/core/config.ts`, `src/core/zones.ts`) has no Electron or Node code in it, so a web version can use the same files.
+
 ## Development
 
 You need [Node.js](https://nodejs.org) 22.12 or newer. The repo has an `.nvmrc`, so with [nvm](https://github.com/nvm-sh/nvm):
@@ -72,9 +98,10 @@ It installs `/etc/apparmor.d/trail-explorer-dev` for this folder's copy of Elect
 | `npm test` | Runs the unit tests. |
 | `npm run typecheck` | Runs the TypeScript checks. |
 | `SHOTS=folder node test/e2e.ts` | Drives the real app against a fake Garmin server and saves screenshots to `folder`. |
+| `node test/e2e-migrate.ts` | Checks that maps and layer settings from versions before the config folder move into it. |
 | `npm run check-garmin-key` | Tests a real Garmin key from the terminal: how far back rides go and how fast downloads are. |
 
-The development copy is named **Trail Explorer Dev**. It has its own data folder and keychain entry, so it never touches the installed app's rides or key. The first time you run `npm run dev`, it copies your rides and maps (never the key) from the installed app. Run `npm run dev -- --fresh-copy` to copy them again.
+The development copy is named **Trail Explorer Dev**. It has its own data folder and keychain entry, so it never touches the installed app's rides or key. The first time you run `npm run dev`, it copies your rides and config folder (maps and zones included, never the key) from the installed app. Run `npm run dev -- --fresh-copy` to copy them again.
 
 App data is stored in:
 
@@ -84,12 +111,13 @@ App data is stored in:
 ### Layout
 
 ```
-src/core/      FIT parsing, track simplification and the heatmap builder (no Electron)
+src/core/      FIT parsing, tracks, heatmap builder, config and zones (no Electron)
 src/desktop/   Electron main process: Garmin sync, SQLite store, maps, key storage
 src/ui/        React renderer, MapLibre map
 resources/     Bundled map styles, sprites and fonts
 scripts/       Dev runner, sandbox setup, style generator, Garmin key check
-test/          Unit tests, fake Garmin server, end-to-end test
+config.example/  A complete example config folder
+test/          Unit tests, fake Garmin server, end-to-end tests
 ```
 
 ## Credits

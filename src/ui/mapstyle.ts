@@ -1,34 +1,11 @@
-// Builds one MapLibre style from the layers the user has turned on.
+// Builds one MapLibre style from the config's layers.
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl';
-import type { LayerState, MapInfo } from '../core/api.ts';
+import type { MapInfo } from '../core/api.ts';
+import type { Config } from '../core/config.ts';
+import { zonesGeoJson } from '../core/zones.ts';
 
-export const HEATMAP = 'heatmap';
-export const COLORS = ['#2F6BFF', '#8A3FFC', '#E0369A', '#F0282D', '#FFE14D', '#FFFFFF'];
-export const LEGEND = ['1', '2 to 3', '4 to 7', '8 to 15', '16 to 39', '40 or more'];
-const FROM = [1, 2, 4, 8, 16, 40];
-
-const OSM = '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
-
-/** Default maps. Addresses live only here (and in the CSP in main.ts). */
-export const DEFAULT_MAPS: { id: string; name: string; note: string; raster?: SourceSpecification }[] = [
-  { id: 'openfreemap', name: 'World map', note: 'OpenFreeMap' },
-  {
-    id: 'opentopomap', name: 'World topo', note: 'OpenTopoMap',
-    raster: {
-      type: 'raster', tileSize: 256, maxzoom: 17,
-      tiles: ['a', 'b', 'c'].map((s) => `https://${s}.tile.opentopomap.org/{z}/{x}/{y}.png`),
-      attribution: `${OSM}, SRTM | <a href="https://opentopomap.org" target="_blank">© OpenTopoMap</a> (CC-BY-SA)`,
-    },
-  },
-  {
-    id: 'ign', name: 'Spain topo', note: 'IGN',
-    raster: {
-      type: 'raster', tileSize: 256, minzoom: 5, maxzoom: 18, bounds: [-19, 27, 5.5, 44.5],
-      tiles: ['https://www.ign.es/wmts/mapa-raster?layer=MTN&style=default&tilematrixset=GoogleMapsCompatible&Service=WMTS&Request=GetTile&Version=1.0.0&Format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}'],
-      attribution: '<a href="https://www.ign.es" target="_blank">CC BY 4.0 ign.es</a>',
-    },
-  },
-];
+export const ZONES = 'zones';
+export const ZONE_COLOR = '#d0021b';
 
 export interface Bundled {
   liberty: { sources: Record<string, SourceSpecification>; layers: LayerSpecification[] };
@@ -64,19 +41,29 @@ function put(layer: any, prefix: string, opacity: number, source?: string): Laye
   return l;
 }
 
-export function buildStyle(layers: LayerState[], maps: MapInfo[], bundled: Bundled, heatVersion: number): StyleSpecification {
+export interface StyleInput {
+  config: Config;
+  /** Map files that could be read, by layer id. */
+  maps: Record<string, MapInfo>;
+  bundled: Bundled;
+  heatVersion: number;
+  /** Draw the excluded zones on top. Only for the desktop app: on a website they would show where you live. */
+  showZones: boolean;
+}
+
+export function buildStyle({ config, maps, bundled, heatVersion, showZones }: StyleInput): StyleSpecification {
   const sources: Record<string, SourceSpecification> = {};
-  const out: LayerSpecification[] = [{ id: 'paper', type: 'background', paint: { 'background-color': '#eeeeee' } }];
-  for (const st of [...layers].reverse()) {
-    if (!st.on) continue;
-    const k = st.opacity;
-    const def = DEFAULT_MAPS.find((d) => d.id === st.id);
-    const map = maps.find((m) => m.id === st.id);
-    if (st.id === HEATMAP) {
+  const out: LayerSpecification[] = [{ id: 'paper', type: 'background', paint: { 'background-color': config.map.background } }];
+  const { bands, outline } = config.heatmap;
+  for (const def of [...config.layers].reverse()) {
+    if (!def.on) continue;
+    const k = def.opacity;
+    const map = def.type === 'file' ? maps[def.id] : undefined;
+    if (def.type === 'heatmap') {
       sources.heatmap = { type: 'geojson', data: `trail://heatmap/heatmap.json?v=${heatVersion}`, tolerance: 0.3, maxzoom: 15 };
       const width = (extra: number): any => ['interpolate', ['linear'], ['zoom'], 2, 1.6 + extra, 9, 2 + extra, 13, 3.5 + extra, 16, 6 + extra, 19, 10 + extra];
       const layout: any = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'n'] };
-      const color: any = ['step', ['get', 'n'], COLORS[0]!, ...FROM.slice(1).flatMap((n, i) => [n, COLORS[i + 1]!])];
+      const color: any = bands.length > 1 ? ['step', ['get', 'n'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;
       const isLine: any = ['==', ['geometry-type'], 'LineString'];
       out.push(
         {
@@ -84,20 +71,21 @@ export function buildStyle(layers: LayerState[], maps: MapInfo[], bundled: Bundl
           id: 'heat-dots', type: 'circle', source: 'heatmap', maxzoom: 8, filter: ['==', ['geometry-type'], 'Point'],
           layout: { 'circle-sort-key': ['get', 'n'] },
           paint: {
-            'circle-color': color, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 3.5, 8, 5], 'circle-stroke-color': '#14141e', 'circle-stroke-width': 1.5,
+            'circle-color': color, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 3.5, 8, 5], 'circle-stroke-color': outline, 'circle-stroke-width': 1.5,
             'circle-opacity': scale(['interpolate', ['linear'], ['zoom'], 7, 1, 8, 0], k) as any, 'circle-stroke-opacity': scale(['interpolate', ['linear'], ['zoom'], 7, 1, 8, 0], k) as any,
           },
         },
-        { id: 'heat-outline', type: 'line', source: 'heatmap', filter: isLine, layout, paint: { 'line-color': '#14141e', 'line-width': width(3), 'line-opacity': 0.9 * k } },
+        { id: 'heat-outline', type: 'line', source: 'heatmap', filter: isLine, layout, paint: { 'line-color': outline, 'line-width': width(3), 'line-opacity': 0.9 * k } },
         {
           id: 'heat', type: 'line', source: 'heatmap', filter: isLine, layout,
           paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': k },
         },
       );
-    } else if (def?.raster) {
-      sources[def.id] = def.raster;
+    } else if (def.type === 'raster') {
+      const { tiles, tileSize, minzoom, maxzoom, bounds, attribution } = def;
+      sources[def.id] = { type: 'raster', tiles, tileSize, minzoom, maxzoom, ...(bounds ? { bounds } : {}), attribution };
       out.push({ id: def.id, type: 'raster', source: def.id, paint: { 'raster-opacity': k, 'raster-fade-duration': 100 } });
-    } else if (def) {
+    } else if (def.type === 'openfreemap') {
       for (const [n, s] of Object.entries(bundled.liberty.sources)) sources[`${def.id}/${n}`] = s;
       for (const l of bundled.liberty.layers) out.push(put(l, def.id, k));
     } else if (map) {
@@ -134,6 +122,13 @@ export function buildStyle(layers: LayerState[], maps: MapInfo[], bundled: Bundl
         }
       }
     }
+  }
+  if (showZones && config.zones.length) {
+    sources[ZONES] = { type: 'geojson', data: zonesGeoJson(config.zones) };
+    out.push(
+      { id: 'zones-fill', type: 'fill', source: ZONES, paint: { 'fill-color': ZONE_COLOR, 'fill-opacity': 0.12 } },
+      { id: 'zones-line', type: 'line', source: ZONES, paint: { 'line-color': ZONE_COLOR, 'line-width': 2, 'line-dasharray': [2, 1.5] } },
+    );
   }
   return {
     version: 8,

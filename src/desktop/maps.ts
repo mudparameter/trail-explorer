@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants, createReadStream, createWriteStream } from 'node:fs';
-import { copyFile, mkdir, open, rm, stat, type FileHandle } from 'node:fs/promises';
+import { copyFile, mkdir, open, rename, rm, stat, type FileHandle } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { gunzipSync, inflateSync } from 'node:zlib';
@@ -251,6 +251,25 @@ async function unzipMap(zip: string, dest: string): Promise<string> {
   return name;
 }
 
+/** What the app needs to know about a map file. Slow for big Shortbread maps, so callers cache it. */
+async function describe(r: Reader): Promise<Omit<MapInfo, 'id' | 'name'>> {
+  const shortbread = r.meta.kind === 'vector' && r.meta.layers.includes('streets') && r.meta.layers.includes('water_polygons');
+  return {
+    kind: r.meta.kind === 'raster' ? 'raster' : shortbread ? 'shortbread' : 'vector',
+    bounds: shortbread ? await realBounds(r) : r.meta.bounds,
+    minzoom: r.meta.minzoom,
+    maxzoom: r.meta.maxzoom,
+    layers: r.meta.layers,
+    attribution: r.meta.attribution || '© OpenStreetMap contributors',
+  };
+}
+
+/** A file name made from a map's name: "Crater Lake.osm" becomes "crater-lake". */
+export function slug(name: string): string {
+  return name.toLowerCase().replace(/\.(pmtiles|mbtiles|zip)$/i, '').replace(/\.osm$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'map';
+}
+
+/** Offline map files, all in one folder, each known by a layer id. */
 export class Maps {
   private dir: string;
   private open = new Map<string, Promise<Reader>>();
@@ -259,17 +278,52 @@ export class Maps {
   constructor(dir: string) {
     this.dir = dir;
   }
+  /** Moves to another folder, forgetting every map. */
+  async setDir(dir: string) {
+    await this.close();
+    this.files.clear();
+    this.dir = dir;
+  }
+  /** Serves layer `id` from `file` in the folder. */
   register(id: string, file: string) {
-    this.files.set(id, join(this.dir, basename(file)));
+    const f = join(this.dir, basename(file));
+    if (this.files.get(id) === f) return;
+    this.forget(id);
+    this.files.set(id, f);
+  }
+  /** Stops serving a layer, leaving its file alone. */
+  forget(id: string) {
+    const r = this.open.get(id);
+    this.open.delete(id);
+    this.files.delete(id);
+    if (r) void r.then((x) => x.close()).catch(() => {});
+  }
+  ids() {
+    return [...this.files.keys()];
   }
 
+  /** Reads a map file already in the folder. */
+  async inspect(file: string): Promise<Omit<MapInfo, 'id' | 'name'>> {
+    let r: Reader;
+    try {
+      r = await openMap(join(this.dir, basename(file)));
+    } catch (e) {
+      throw new Error(`This map file could not be read. ${e instanceof Error ? e.message : ''}`.trim());
+    }
+    try {
+      return await describe(r);
+    } finally {
+      await r.close().catch(() => {});
+    }
+  }
+
+  /** Copies a map (or the map in a .zip) into the folder under a readable name. */
   async add(path: string): Promise<{ file: string; info: MapInfo }> {
     await mkdir(this.dir, { recursive: true });
     const st = await stat(path);
     if (!st.isFile()) throw new Error(HELP);
     if (st.size > MAX_MAP) throw new Error('This map file is too large.');
-    const id = randomUUID();
-    const tmp = join(this.dir, `${id}.part`);
+    const tmp = join(this.dir, `.${randomUUID()}.part`);
     try {
       let label = basename(path);
       const kind = await magic(path);
@@ -284,31 +338,25 @@ export class Maps {
       } catch (e) {
         throw new Error(`This map file could not be read. ${e instanceof Error ? e.message : ''}`.trim());
       }
+      let meta: Omit<MapInfo, 'id' | 'name'>;
       try {
-        const shortbread = r.meta.kind === 'vector' && r.meta.layers.includes('streets') && r.meta.layers.includes('water_polygons');
-        const info: MapInfo = {
-          id,
-          name: label.replace(/\.(pmtiles|mbtiles|zip)$/i, '').replace(/\.osm$/i, '').slice(0, 100) || 'Map',
-          kind: r.meta.kind === 'raster' ? 'raster' : shortbread ? 'shortbread' : 'vector',
-          bounds: shortbread ? await realBounds(r) : r.meta.bounds,
-          minzoom: r.meta.minzoom,
-          maxzoom: r.meta.maxzoom,
-          layers: r.meta.layers,
-          attribution: r.meta.attribution || '© OpenStreetMap contributors',
-        };
-        const file = `${id}.${inner}`;
-        await r.close();
-        await copyFile(tmp, join(this.dir, file), constants.COPYFILE_FICLONE);
-        this.register(id, file);
-        return { file, info };
-      } catch (e) {
+        meta = await describe(r);
+      } finally {
         await r.close().catch(() => {});
-        throw e;
       }
+      const stem = slug(label);
+      let id = stem;
+      for (let n = 2; await stat(join(this.dir, `${id}.${inner}`)).then(() => true, () => false); n++) id = `${stem}-${n}`;
+      const file = `${id}.${inner}`;
+      await rename(tmp, join(this.dir, file));
+      this.register(id, file);
+      const name = label.replace(/\.(pmtiles|mbtiles|zip)$/i, '').replace(/\.osm$/i, '').slice(0, 100) || 'Map';
+      return { file, info: { id, name, ...meta } };
     } finally {
       await rm(tmp, { force: true });
     }
   }
+  /** Stops serving a layer and deletes its file. */
   async remove(id: string) {
     const file = this.files.get(id);
     const r = this.open.get(id);

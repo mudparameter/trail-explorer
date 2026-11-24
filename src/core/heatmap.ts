@@ -9,14 +9,16 @@ export interface HeatOptions {
   angle: number;
   /** Length of the pieces that make up new sections, in metres. */
   step: number;
+  /** Lowest count of each colour band. Neighbouring sections in one band are drawn as one line. */
+  bands: number[];
 }
-export const DEFAULTS: HeatOptions = { radius: 15, angle: 35, step: 10 };
-
 /** Lowest count of each colour band: 1, 2-3, 4-7, 8-15, 16-39, 40+. */
 export const BANDS = [1, 2, 4, 8, 16, 40];
-export const bandOf = (n: number): number => {
+export const DEFAULTS: HeatOptions = { radius: 15, angle: 35, step: 10, bands: BANDS };
+
+export const bandOf = (n: number, bands: number[] = BANDS): number => {
   let b = 0;
-  while (b + 1 < BANDS.length && n >= BANDS[b + 1]!) b++;
+  while (b + 1 < bands.length && n >= bands[b + 1]!) b++;
   return b;
 };
 
@@ -412,7 +414,7 @@ export class HeatmapBuilder {
     let i = 0;
     while (i < edges.length) {
       let j = i;
-      while (j + 1 < edges.length && bandOf(counts[j + 1]!) === bandOf(counts[i]!)) j++;
+      while (j + 1 < edges.length && bandOf(counts[j + 1]!, this.opt.bands) === bandOf(counts[i]!, this.opt.bands)) j++;
       const part = counts.slice(i, j + 1).sort((p, q) => p - q);
       lines.push({
         n: part[part.length >> 1]!,

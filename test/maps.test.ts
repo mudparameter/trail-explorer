@@ -23,6 +23,14 @@ test('image map: added, served, renamed safely, removed', async () => {
   const { info } = await m.add(rasterFile(d));
   assert.equal(info.kind, 'raster');
   assert.equal(info.name, 'My trails');
+  assert.equal(info.id, 'my-trails');
+  assert.deepEqual(readdirSync(join(d, 'maps')), ['my-trails.mbtiles']);
+  // A second copy gets its own name, and reads back the same.
+  const again = await m.add(rasterFile(tmp()));
+  assert.equal(again.file, 'my-trails-2.mbtiles');
+  const { id: _id, name: _name, ...meta } = again.info;
+  assert.deepEqual(await m.inspect(again.file), meta);
+  await m.remove(again.info.id);
   assert.equal(info.attribution, 'Me');
   assert.deepEqual(info.bounds, [-1, 39, 0, 40]);
   assert.equal((await m.tile(info.id, 1, 0, 0))?.type, 'image/png');
@@ -38,6 +46,7 @@ test('zip with a map inside', async () => {
   writeFileSync(z, zipSync({ 'a/README.txt': Buffer.from('hi'), 'a/../../evil.mbtiles': readFileSync(rasterFile(d)) }));
   const { info, file } = await m.add(z);
   assert.equal(info.name, 'evil');
+  assert.equal(file, 'evil.mbtiles');
   assert.ok(existsSync(join(d, 'maps', file)));
   assert.ok(!existsSync(join(d, 'evil.mbtiles')));
 });
