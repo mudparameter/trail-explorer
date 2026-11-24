@@ -7,11 +7,13 @@ import { trail } from './api.ts';
 import { Customize } from './Customize.tsx';
 import { buildStyle, KEY_SEP, type Bundled, type StyleArea } from './mapstyle.ts';
 import { MapView } from './MapView.tsx';
+import { Planner } from './Planner.tsx';
+import { RoutesScreen } from './RoutesScreen.tsx';
 import { Help, KeyForm, Settings } from './Screens.tsx';
 import { RoadsPanel } from './Roads.tsx';
 import { Sidebar } from './Sidebar.tsx';
 
-export type Screen = 'map' | 'customize' | 'settings' | 'help';
+export type Screen = 'map' | 'routes' | 'customize' | 'settings' | 'help';
 /** Clicking the map places a new zone, or moves one. */
 export type Placing = { kind: 'new' } | { kind: 'move'; id: string } | null;
 
@@ -34,6 +36,8 @@ export function App() {
   const [layers, setLayers] = useState<LayerState[]>([]);
   const [bundled, setBundled] = useState<Bundled | null>(null);
   const [screen, setScreen] = useState<Screen>('map');
+  /** The route planner fills the window in place of everything else. */
+  const [planning, setPlanning] = useState(false);
   const [goTo, setGoTo] = useState<{ bounds: Bounds | View; n: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [offline, setOffline] = useState<string | null>(null);
@@ -232,6 +236,13 @@ export function App() {
     );
   }
 
+  if (planning) {
+    return (
+      <Planner config={shown} maps={cfg.maps} bundled={bundled!} areas={areas}
+        exit={() => { setPlanning(false); setScreen('map'); }} showRoutes={() => { setPlanning(false); setScreen('routes'); }} />
+    );
+  }
+
   const daysLeft = status.keyExpires ? Math.ceil((Date.parse(status.keyExpires) - Date.now()) / 86_400_000) : null;
   const m = shown.map;
   return (
@@ -250,6 +261,7 @@ export function App() {
         showZones={showZones} setShowZones={toggleZones} placing={placing}
         setPlacing={(p) => { setScreen('map'); setDrawing(false); setPlacing(p); }}
         drawing={drawing} startDrawing={startDrawing} areas={areas} editArea={editArea}
+        openPlanner={() => { setDrawing(false); setPlacing(null); setPlanning(true); }}
         listArea={(id) => { setScreen('map'); setSelected(null); setListed(id); }}
       />
       <div className="main">
@@ -298,6 +310,7 @@ export function App() {
           </div>
         )}
         {screen === 'customize' && <Customize cfg={cfg} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
+        {screen === 'routes' && <RoutesScreen config={shown} maps={cfg.maps} bundled={bundled!} plan={() => setPlanning(true)} />}
         {screen === 'settings' && <Settings status={status} />}
         {screen === 'help' && <Help />}
       </div>

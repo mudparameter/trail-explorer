@@ -1,14 +1,16 @@
 // Reads, writes and watches the config folder on disk. What the files mean is in core/config.ts.
 import { watch, type FSWatcher } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AREAS_FILE } from '../core/areas.ts';
 import { APP_ZONES, FILES, fileText, parseConfig, type Config, type Problem } from '../core/config.ts';
 import { CONFIG_README } from '../core/config-readme.ts';
+import { isRouteId, ROUTES_FILE } from '../core/routes.ts';
 
 const MAX_FILE = 20 * 1024 ** 2;
 /** The only files the app writes. Map files go through Maps. */
-const WRITABLE = new Set<string>([...FILES, APP_ZONES, AREAS_FILE]);
+const WRITABLE = new Set<string>([...FILES, APP_ZONES, AREAS_FILE, ROUTES_FILE]);
+const writable = (file: string) => WRITABLE.has(file) || isRouteId(file.match(/^routes\/([a-z0-9]+)\.gpx$/)?.[1]);
 
 export class ConfigDir {
   readonly dir: string;
@@ -64,12 +66,18 @@ export class ConfigDir {
 
   /** Replaces a file in one step, so a crash or a watcher never sees half of it. */
   async write(file: string, text: string) {
-    if (!WRITABLE.has(file)) throw new Error(`The app does not write ${file}.`);
+    if (!writable(file)) throw new Error(`The app does not write ${file}.`);
     const full = join(this.dir, file);
     await mkdir(dirname(full), { recursive: true });
     const tmp = `${full}.part`;
     await writeFile(tmp, text);
     await rename(tmp, full);
+  }
+
+  /** Deletes a file the app writes. */
+  async remove(file: string) {
+    if (!writable(file)) throw new Error(`The app does not delete ${file}.`);
+    await rm(join(this.dir, file), { force: true });
   }
 
   /** Calls `fn` shortly after anything in the folder changes. Returns a function that stops watching. */

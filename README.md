@@ -16,6 +16,7 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.
 - **Excluded zones.** Hide places such as around home: click the map to place a circle, or draw any shape in a GeoJSON file. Rides are cut where they enter a zone.
 - **Roads and trails in an area.** Draw circles on the map to get every road, track, cycleway and trail inside them, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). Circles are kept and listed in the sidebar, where each can be named, turned off, filtered by kind or deleted. Data downloads in the background and is shared: circles that overlap never download or store it twice. Needs the internet, and sends each circle's position to that server.
+- **Route planner.** A separate mode for planning rides in your circles. Pick the circles, click a start (and a finish, or loop back), set a distance and optionally climbing, and get three to five routes that mix trails you have ridden with ones you haven't. Each has a difficulty rating with reasons, distance, climbing and descent in metric and imperial, the share of new trail, warnings for very steep parts, and an elevation profile. Save the ones you like; the Routes screen lists them in a sortable table, where they can be renamed, viewed or downloaded as `.gpx`. See [Route planning](#route-planning).
 - **Portable config.** Colors, start view, zoom limits, layers, offline maps and zones live in one folder of plain JSON files. Edit them in the app's Customize screen or by hand, and copy the folder to another computer.
 - **Private.** Rides stay on your computer. The Garmin key is encrypted with your system keychain and sent only to Garmin.
 
@@ -51,6 +52,29 @@ The first sync downloads every ride Garmin returns, which seems to be about the 
 1. Go to [extract.bbbike.org](https://extract.bbbike.org) and draw a box around your area.
 2. Choose the format **PMTiles Shortbread** (MBTiles Shortbread works too) and enter your email address.
 3. When the link arrives, download the `.zip`, then use **Add map** in Trail Explorer or drop the file on the window. You don't need to unzip it.
+
+## Route planning
+
+Open **Route planner →** under Roads and trails in the sidebar. It is a separate mode, with a blue bar across the top; **← Back to the map** returns.
+
+1. **Areas:** tick the circles to plan in. The app reads their paths, works out which you have ridden (any activity shown on the heatmap, within about 20 m and going the same way), and downloads elevation for them.
+2. **Start and finish:** a loop back to the start, or a start and a separate finish. Click the map to place them.
+3. **Your ride:** distance in km or miles, climbing in metres or feet (optional), how much new trail (a little, some, lots), which kinds of path, and whether to allow paths marked private or no bikes (off by default).
+4. **Pick a route:** three to five routes, best first. Click one to see it, open its elevation profile, and save it.
+
+Routing is deterministic and runs on your computer, on the OpenStreetMap data already downloaded for your circles. The same areas, rides and request always give the same routes; nothing is guessed by AI. Each route aims for a share of new trail rather than all of it, so an area fills in over several rides.
+
+Difficulty (Easy, Moderate, Hard, Very hard) comes from the kinds of path, `mtb:scale` or `sac_scale` where OpenStreetMap has them, climbing per km, total climbing, length, and the steepest climb and descent over 50 m. Parts at 15% or steeper are listed and shaded on the profile.
+
+Elevation comes from the free [Terrain Tiles on AWS](https://registry.opendata.aws/terrain-tiles/) (Mapzen's Terrarium format): about 10 m resolution in the USA, 30 m SRTM in most other places, finer in some. The tiles are kept in the app's data folder (`terrain/`) and only the tile numbers are sent, nothing about you or your rides.
+
+Limitations:
+
+- **Only the circles you choose.** Routes never leave them, and circles that don't touch can't be joined. If an area is too small for the distance asked, the planner says so.
+- **OpenStreetMap is the map.** Missing, misplaced or wrongly tagged paths end up in routes. Difficulty tags are often missing, so ratings lean on path type and gradient.
+- **Elevation is approximate.** 10–30 m data smooths short, very steep pitches. Climbing can be off by 10–20%, and steep warnings are estimates.
+- **Distance is a target.** Routes are usually within about 10–15% of it.
+- **"Ridden" is matched, not known.** Paths a few metres apart, or poor GPS, can be counted wrongly. A planned route counts only once you have ridden it and it has synced or been imported.
 
 ## Configuration
 
@@ -112,6 +136,7 @@ It installs `/etc/apparmor.d/trail-explorer-dev` for this folder's copy of Elect
 | `npm run typecheck` | Runs the TypeScript checks. |
 | `SHOTS=folder node test/e2e.ts` | Drives the real app against a fake Garmin server and saves screenshots to `folder`. |
 | `node test/e2e-migrate.ts` | Checks that maps and layer settings from versions before the config folder move into it. |
+| `SHOTS=folder node test/e2e-planner.ts` | Drives the route planner against fake trail and elevation servers: plan, save, sort, rename, download and delete routes. |
 | `npm run check-garmin-key` | Tests a real Garmin key from the terminal: how far back rides go and how fast downloads are. |
 
 The development copy is named **Trail Explorer Dev**. It has its own data folder and keychain entry, so it never touches the installed app's rides or key. The first time you run `npm run dev`, it copies your rides and config folder (maps and zones included, never the key) from the installed app. Run `npm run dev -- --fresh-copy` to copy them again.
@@ -135,7 +160,7 @@ test/          Unit tests, fake Garmin server, end-to-end tests
 
 ## Credits
 
-World map by [OpenFreeMap](https://openfreemap.org), © OpenMapTiles, data © OpenStreetMap contributors. Topo map by [OpenTopoMap](https://opentopomap.org) (CC BY-SA). Spain topo © [IGN](https://www.ign.es) (CC BY 4.0). Road and trail searches: data © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki. See [`resources/CREDITS.txt`](resources/CREDITS.txt).
+World map by [OpenFreeMap](https://openfreemap.org), © OpenMapTiles, data © OpenStreetMap contributors. Topo map by [OpenTopoMap](https://opentopomap.org) (CC BY-SA). Spain topo © [IGN](https://www.ign.es) (CC BY 4.0). Road and trail searches: data © OpenStreetMap contributors (ODbL), via the Overpass API. Elevation: [Terrain Tiles on AWS](https://registry.opendata.aws/terrain-tiles/) (Mapzen; USGS 3DEP, SRTM, GMTED2010, ETOPO1 and others). Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki. See [`resources/CREDITS.txt`](resources/CREDITS.txt).
 
 ## License
 

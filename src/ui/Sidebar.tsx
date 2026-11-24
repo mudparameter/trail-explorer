@@ -26,6 +26,8 @@ interface Props {
   setPlacing(p: Placing): void;
   drawing: boolean;
   startDrawing(): void;
+  /** Opens the route planner. */
+  openPlanner(): void;
   areas: AreaView[];
   listArea(id: string): void;
   editArea: EditArea;
@@ -41,7 +43,7 @@ function ago(iso: string | null): string {
   return `${Math.round(h / 24)} days ago`;
 }
 
-const SCREENS: [Screen, string][] = [['map', 'Map'], ['customize', 'Customize'], ['settings', 'Settings'], ['help', 'Help']];
+const SCREENS: [Screen, string][] = [['map', 'Map'], ['routes', 'Routes'], ['customize', 'Customize'], ['settings', 'Settings'], ['help', 'Help']];
 
 /** Where a zone is, for "Go to". */
 function zoneBounds(z: Zone): Bounds {
@@ -171,6 +173,10 @@ export function Sidebar(p: Props) {
         areas={p.areas} edit={p.editArea} drawing={p.drawing} startDrawing={p.startDrawing} report={report} list={p.listArea}
         go={(b) => { p.setScreen('map'); p.go(b); }}
       />
+      <div className="planner-cta">
+        <button className="primary" disabled={!p.areas.some((a) => a.state === 'ready')} onClick={p.openPlanner}>Route planner →</button>
+        <p className="small">{p.areas.some((a) => a.state === 'ready') ? 'Plan routes in these areas that take in trails you haven\'t ridden.' : 'Draw an area first, then plan routes in it.'}</p>
+      </div>
 
       <h2>Times ridden</h2>
       <ul className="legend">

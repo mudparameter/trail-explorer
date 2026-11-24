@@ -1,3 +1,7 @@
+import type { FeatureCollection } from 'geojson';
+import type { PlanRequest } from './planner.ts';
+import type { PlannedRoute, RouteStats } from './route.ts';
+import type { SavedRoute } from './routes.ts';
 import type { Activity } from './activities.ts';
 // The only interface between the window and the rest of the app.
 // A web version would back this with a server.
@@ -101,6 +105,30 @@ export interface AreaView extends Area {
   /** Metres of each kind inside the circle. */
   totals: Partial<Record<RoadKind, number>>;
 }
+/** Getting chosen areas ready for route planning. */
+export interface PlanProgress {
+  stage: 'roads' | 'elevation' | 'network';
+  done: number;
+  total: number;
+}
+export interface PlanNetwork {
+  /** Names this network; routes are asked for by it. */
+  key: string;
+  /** Every path in the areas, with kind, ridden and restricted. */
+  geojson: FeatureCollection;
+  /** Metres of path, and of that, ridden. */
+  total: number;
+  ridden: number;
+  bounds: Bounds;
+  /** Elevation tiles that could not be downloaded. Routes there have no elevation. */
+  missingElevation: number;
+}
+/** A saved route, with its points and stats worked out again from its GPX file. */
+export interface RouteDetail {
+  route: SavedRoute;
+  line: [number, number, number][];
+  stats: RouteStats;
+}
 export type ConfigFile = (typeof FILES)[number];
 export type Result<T = void> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -146,4 +174,18 @@ export interface TrailApi {
   /** Removes an area. Data another area also uses is kept. */
   removeArea(id: string): Promise<Result>;
   retryArea(id: string): Promise<Result>;
+
+  /** Gets areas ready for route planning: their paths, which you have ridden, and elevation. */
+  planPrepare(areaIds: string[]): Promise<Result<PlanNetwork>>;
+  onPlanProgress(fn: (p: PlanProgress) => void): () => void;
+  /** Three to five routes for a request, best first. */
+  planRoutes(key: string, request: PlanRequest): Promise<Result<PlannedRoute[]>>;
+  getRoutes(): Promise<SavedRoute[]>;
+  getRoute(id: string): Promise<Result<RouteDetail>>;
+  /** Saves one of the routes just planned. Returns it as saved. */
+  saveRoute(plannedId: string, name: string): Promise<Result<SavedRoute>>;
+  renameRoute(id: string, name: string): Promise<Result>;
+  deleteRoute(id: string): Promise<Result>;
+  /** Asks where to save the route's .gpx file. False when cancelled. */
+  exportRoute(id: string): Promise<Result<boolean>>;
 }

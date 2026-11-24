@@ -109,6 +109,19 @@ export function Help() {
         haven't ridden yet. The Roads and trails layer under Layers sets their opacity and line width for every circle. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
         needs the internet and sends each circle's position to an OpenStreetMap data server.
       </p>
+      <h2>Plan a route</h2>
+      <p>
+        Draw circles first. Then choose Route planner under Roads and trails. It opens a separate mode, with a blue bar on top, in
+        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance, climbing
+        and how much new trail you want, and pick from three to five routes. Each shows its difficulty and why, distance, climbing and
+        descent in metric and imperial, steep parts and an elevation profile. Save the ones you like. Saved routes are under Routes,
+        in a table you can sort by clicking a column; there you can rename, view, download as .gpx or delete them.
+      </p>
+      <p>
+        Routes are worked out on your computer from the downloaded OpenStreetMap paths, the same way every time. They stay inside the
+        circles. Elevation is from free terrain data with 10 to 30 m detail, so short steep pitches are smoothed and climbing can be
+        off by 10 to 20%. Paths marked private or no bikes are left out unless you allow them.
+      </p>
       <h2>Hide your rides</h2>
       <p>Untick My rides under Layers. Tick it again to bring them back. Its Line width slider makes ride lines thinner or thicker; double-click it to reset.</p>
       <h2>Change colors, maps and where the map opens</h2>
@@ -124,7 +137,7 @@ export function Help() {
       <h2>Show only some kinds of activity</h2>
       <p>Under Rides in the sidebar, untick a kind, such as Walking and hiking, to leave it off the heatmap. It is saved as "hide" in heatmap.json.</p>
       <h2>Map credits</h2>
-      <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps and road and trail searches © OpenStreetMap contributors (ODbL), via the Overpass API. Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
+      <p>World map by OpenFreeMap, © OpenMapTiles, data from OpenStreetMap. Topo map by OpenTopoMap (CC-BY-SA), SRTM. Spain topo CC BY 4.0 ign.es. Custom maps and road and trail searches © OpenStreetMap contributors (ODbL), via the Overpass API. Elevation: Mapzen Terrain Tiles on AWS (USGS 3DEP, SRTM, GMTED2010, ETOPO1 and others). Fonts: Noto Sans (SIL Open Font License). Icons: VersaTiles and Maki.</p>
     </main>
   );
 }

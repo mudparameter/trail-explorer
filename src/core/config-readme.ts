@@ -24,6 +24,7 @@ Keep this folder private if it has zones in it: they show where you live.
 | \`maps/\` | Offline map files (.pmtiles or .mbtiles) named in layers.json |
 | \`zones/\` | Excluded zones, as GeoJSON files |
 | \`areas.json\` | Circles to find roads and trails in |
+| \`routes.json\`, \`routes/\` | Routes saved from the route planner, with a GPX file each |
 
 ## map.json
 
@@ -141,4 +142,12 @@ or add them by hand. The app downloads what each one needs.
 The road data is not in this folder. The app keeps one shared copy of it
 (\`osm.db\` in its data folder), so overlapping areas never download or store
 anything twice. Moved to another computer, the areas download again there.
+
+## routes.json and routes/
+
+Routes saved from the route planner. \`routes.json\` lists them, one per line,
+with their stats as planned; \`routes/<id>.gpx\` holds each route's track, with
+elevations. Rename and delete them in the app's Routes screen. A name changed
+here by hand shows in the app too; the GPX file keeps the name it was saved
+with until the route is renamed in the app.
 `;
