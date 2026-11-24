@@ -169,12 +169,15 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     const dim: any = selected ? ['case', ['==', ['get', 'key'], selected], 1, 0.35] : 1;
     const width = (extra: number): any => ['interpolate', ['linear'], ['zoom'], 10, 1.5 + extra, 14, 3 + extra, 18, 6 + extra];
     const layout: any = { 'line-cap': 'round', 'line-join': 'round' };
-    out.push(
+    // Roads go under your rides, dashed: what you have ridden shows in ride
+    // colours on top, and only what you haven't stays dashed.
+    const under = out.findIndex((l) => l.id === 'heat-dots');
+    out.splice(under < 0 ? out.length : under, 0,
       { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': AREA_COLOR, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
       // Areas still downloading have a fainter, finer edge.
       { id: 'roads-area-line', type: 'line', source: 'roads-area', paint: { 'line-color': AREA_COLOR, 'line-width': ['case', ['get', 'ready'], 2, 1.5], 'line-opacity': ['case', ['get', 'ready'], 1, 0.6], 'line-dasharray': [3, 2] } },
-      { id: 'roads-casing', type: 'line', source: 'roads', layout, paint: { 'line-color': '#ffffff', 'line-width': width(2), 'line-opacity': dim } },
-      { id: ROAD_LINES, type: 'line', source: 'roads', layout, paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': dim } },
+      { id: 'roads-casing', type: 'line', source: 'roads', layout, paint: { 'line-color': '#ffffff', 'line-width': width(2), 'line-opacity': ['*', 0.8, dim] } },
+      { id: ROAD_LINES, type: 'line', source: 'roads', layout: { 'line-join': 'round' }, paint: { 'line-color': color, 'line-width': width(0), 'line-opacity': dim, 'line-dasharray': [2, 1.5] } },
     );
     if (selected) {
       const only: any = ['==', ['get', 'key'], selected];

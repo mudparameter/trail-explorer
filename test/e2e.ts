@@ -236,6 +236,10 @@ await w.locator('.roads').getByRole('button', { name: /^Unnamed/ }).waitFor();
 await areaRow(0).getByText(/trails · .* tracks · .* roads/).waitFor();
 await w.waitForTimeout(600); await idle();
 await shot('15-roads');
+// Roads are dashed and drawn under the rides, so ridden trails show in ride colours.
+const order = await w.evaluate(() => (window as any).__map.getStyle().layers.map((l: any) => l.id));
+assert.ok(order.indexOf('roads-line') < order.indexOf('heat-outline'), 'roads under rides');
+assert.ok(await w.evaluate(() => !!(window as any).__map.getPaintProperty('roads-line', 'line-dasharray')), 'roads dashed');
 
 // A second circle inside the first is ready at once, with nothing downloaded.
 const calls = overpass.calls;

@@ -104,7 +104,8 @@ export function Help() {
         Under Roads and trails in the sidebar, choose Draw a circle. Click the centre, move the mouse out, and click again. The circle
         is kept, and its roads, tracks, cycleways and trails download in the background, so you can draw several while you wait.
         Each one can be named, turned off, filtered by kind with ▸, or deleted with ×. Click a name in the list, or a line on the map,
-        to show it. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
+        to show it. Roads and trails are dashed and drawn under your rides, so anything still dashed is somewhere you
+        haven't ridden yet. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
         needs the internet and sends each circle's position to an OpenStreetMap data server.
       </p>
       <h2>Hide your rides</h2>
