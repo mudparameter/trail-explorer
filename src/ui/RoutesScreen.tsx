@@ -8,6 +8,7 @@ import type { Bundled } from './mapstyle.ts';
 import { PlanMap } from './PlanMap.tsx';
 import { planStyle } from './planstyle.ts';
 import { pointAt, Profile } from './Profile.tsx';
+import { useNarrow } from './narrow.ts';
 
 type Col = 'name' | 'loop' | 'distance' | 'gain' | 'loss' | 'steep' | 'difficulty' | 'fresh' | 'created';
 const LEVEL = { Easy: 1, Moderate: 2, Hard: 3, 'Very hard': 4 } as const;
@@ -31,6 +32,7 @@ export function RoutesScreen({ config, maps, bundled, plan }: { config: Config; 
   const [confirm, setConfirm] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const narrow = useNarrow();
   const load = () => void trail.getRoutes().then(setRoutes);
   useEffect(load, []);
   const report = async (r: Promise<{ ok: boolean; error?: string }>) => {
@@ -56,7 +58,17 @@ export function RoutesScreen({ config, maps, bundled, plan }: { config: Config; 
         <h1>Saved routes</h1>
         <button onClick={plan}>Plan a route</button>
       </div>
-      <p className="small">Routes saved from the route planner. They are kept in the config folder, in routes.json and a GPX file each. Click a column to sort.</p>
+      <p className="small">Routes saved from the route planner. They are kept in the config folder, in routes.json and a GPX file each.{narrow ? '' : ' Click a column to sort.'}</p>
+      {narrow && routes.length > 1 && (
+        <div className="row">
+          <label>Sort by{' '}
+            <select value={sort.col} onChange={(e) => setSort((s) => ({ ...s, col: e.target.value as Col }))}>
+              {COLS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </label>
+          <button onClick={() => setSort((s) => ({ ...s, up: !s.up }))}>{sort.up ? '▲ Lowest first' : '▼ Highest first'}</button>
+        </div>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
       {routes.length === 0 ? (
         <p>No routes yet. Open the route planner, plan some routes, and save the ones you like.</p>
@@ -77,7 +89,7 @@ export function RoutesScreen({ config, maps, bundled, plan }: { config: Config; 
           <tbody>
             {sorted.map((r) => (
               <tr key={r.id} data-route={r.id} className={open === r.id ? 'on' : ''}>
-                <td className="name">
+                <td className="name" data-label="Name">
                   {editing?.id === r.id ? (
                     <form className="row" onSubmit={async (e) => {
                       e.preventDefault();
@@ -91,14 +103,14 @@ export function RoutesScreen({ config, maps, bundled, plan }: { config: Config; 
                     <button className="link" title="Show this route" onClick={() => setOpen(open === r.id ? null : r.id)}>{r.name}</button>
                   )}
                 </td>
-                <td>{r.loop ? 'Loop' : 'A to B'}</td>
-                <td className="num">{kmShort(r.distance)}</td>
-                <td className="num">{heightShort(r.gain)}</td>
-                <td className="num">{heightShort(r.loss)}</td>
-                <td className="num">↑{Math.round(r.maxUp)}% ↓{Math.round(r.maxDown)}%</td>
-                <td><span className={`badge level-${LEVEL[r.difficulty]}`}>{r.difficulty}</span></td>
-                <td className="num">{kmShort(r.fresh)}</td>
-                <td className="num">{new Date(r.created).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</td>
+                <td data-label="Kind">{r.loop ? 'Loop' : 'A to B'}</td>
+                <td className="num" data-label="Distance">{kmShort(r.distance)}</td>
+                <td className="num" data-label="Climbing">{heightShort(r.gain)}</td>
+                <td className="num" data-label="Descent">{heightShort(r.loss)}</td>
+                <td className="num" data-label="Steepest">↑{Math.round(r.maxUp)}% ↓{Math.round(r.maxDown)}%</td>
+                <td data-label="Difficulty"><span className={`badge level-${LEVEL[r.difficulty]}`}>{r.difficulty}</span></td>
+                <td className="num" data-label="New trail">{kmShort(r.fresh)}</td>
+                <td className="num" data-label="Created">{new Date(r.created).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</td>
                 <td className="actions">
                   {confirm === r.id ? (
                     <span className="row small" role="alert">

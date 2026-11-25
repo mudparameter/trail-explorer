@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { AreaView, Bounds, ConfigState, GroupView, LayerState, Status, View } from '../core/api.ts';
 import { ACTIVITIES, type Activity } from '../core/activities.ts';
 import { APP_ZONES, bandLabels, layerState, MAX_WIDTH, MIN_WIDTH, type Config } from '../core/config.ts';
@@ -8,7 +8,7 @@ import type { Placing, Screen } from './App.tsx';
 import { trail } from './api.ts';
 import { AreaList, type EditArea, type EditGroup, type EditMembers } from './Roads.tsx';
 
-interface Props {
+export interface Props {
   status: Status;
   cfg: ConfigState;
   /** The config as shown, with layer changes that may not be saved yet. */
@@ -63,32 +63,11 @@ function zoneBounds(z: Zone): Bounds {
   return [Math.min(...ps.map((p) => p[0])), Math.min(...ps.map((p) => p[1])), Math.max(...ps.map((p) => p[0])), Math.max(...ps.map((p) => p[1]))];
 }
 
-export function Sidebar(p: Props) {
-  const { status, cfg, config } = p;
-  const [edit, setEdit] = useState<{ id: string; name: string } | null>(null);
-  const [confirm, setConfirm] = useState<string | null>(null);
-  const s = status.sync;
-  const states: LayerState[] = config.layers.map(layerState);
-  const set = (id: string, v: Partial<LayerState>) => p.change(states.map((l) => (l.id === id ? { ...l, ...v } : l)));
-  /** Swaps a layer with the next one shown above or below it. Hidden layers keep their place. */
-  const move = (id: string, d: number) => {
-    const shown = states.filter((l) => status.features.rides || config.layers.find((x) => x.id === l.id)?.type !== 'heatmap');
-    const other = shown[shown.findIndex((l) => l.id === id) + d];
-    if (!other) return;
-    const a = states.findIndex((l) => l.id === id), b = states.findIndex((l) => l.id === other.id);
-    const ls = [...states];
-    [ls[a], ls[b]] = [ls[b]!, ls[a]!];
-    p.change(ls);
-  };
-  const busy = s.state !== 'idle' && s.state !== 'error' && s.state !== 'key-rejected';
-  const labels = bandLabels(config.heatmap.bands);
-  const report = async (r: Promise<{ ok: boolean; error?: string }>) => {
-    const x = await r;
-    if (!x.ok) p.notice(x.error ?? 'Something went wrong.');
-    return x.ok;
-  };
+/** The parts of the sidebar. On a phone they are shown a few at a time, each in its own sheet. */
+export type Part = 'rides' | 'layers' | 'zones' | 'areas' | 'legend';
+const ALL: Part[] = ['rides', 'layers', 'zones', 'areas', 'legend'];
 
-  const { rides, mapFiles } = status.features;
+export function Sidebar(p: Props) {
   return (
     <aside className="side">
       <h1>Trail Explorer</h1>
@@ -97,8 +76,53 @@ export function Sidebar(p: Props) {
           <button key={x} className="link" aria-current={p.screen === x ? 'page' : undefined} onClick={() => p.setScreen(x)}>{label}</button>
         ))}
       </nav>
+      <Parts p={p} show={ALL} />
+    </aside>
+  );
+}
 
-      {rides && <>
+type Report = (r: Promise<{ ok: boolean; error?: string }>) => Promise<boolean>;
+
+/** The chosen parts of the sidebar, in the order given. */
+export function Parts({ p, show }: { p: Props; show: Part[] }) {
+  const report: Report = async (r) => {
+    const x = await r;
+    if (!x.ok) p.notice(x.error ?? 'Something went wrong.');
+    return x.ok;
+  };
+  const { rides } = p.status.features;
+  const ready = p.areas.some((a) => a.state === 'ready');
+  return (
+    <>
+      {show.map((part) => {
+        if (part === 'rides') return rides && <Rides key={part} p={p} report={report} />;
+        if (part === 'layers') return <Layers key={part} p={p} report={report} />;
+        if (part === 'zones') return rides && <Zones key={part} {...p} report={report} />;
+        if (part === 'legend') return rides && <Legend key={part} config={p.config} />;
+        return (
+          <Fragment key={part}>
+            <AreaList
+              areas={p.areas} groups={p.groups} edit={p.editArea} editGroup={p.editGroup} editMembers={p.editMembers}
+              drawing={p.drawing} drawShape={p.drawShape} drawGroup={p.drawGroup} startDrawing={p.startDrawing} report={report} list={p.listArea}
+              go={(b) => { p.setScreen('map'); p.go(b); }}
+            />
+            <div className="planner-cta">
+              <button className="primary" disabled={!ready} onClick={p.openPlanner}>Route planner →</button>
+              <p className="small">{ready ? 'Plan routes in these areas that take in trails you haven\'t ridden.' : 'Draw an area first, then plan routes in it.'}</p>
+            </div>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function Rides({ p, report }: { p: Props; report: Report }) {
+  const { status, config } = p;
+  const s = status.sync;
+  const busy = s.state !== 'idle' && s.state !== 'error' && s.state !== 'key-rejected';
+  return (
+    <>
       <h2>Rides</h2>
       {s.state === 'downloading' ? (
         <>
@@ -121,8 +145,29 @@ export function Sidebar(p: Props) {
           : <button disabled={status.import?.state === 'reading'} onClick={() => void report(trail.importRides())}>Import rides…</button>}
         <button onClick={p.goToRides}>Go to my rides</button>
       </div>
-      </>}
+    </>
+  );
+}
 
+function Layers({ p, report }: { p: Props; report: Report }) {
+  const { status, cfg, config } = p;
+  const [edit, setEdit] = useState<{ id: string; name: string } | null>(null);
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const states: LayerState[] = config.layers.map(layerState);
+  const set = (id: string, v: Partial<LayerState>) => p.change(states.map((l) => (l.id === id ? { ...l, ...v } : l)));
+  const { rides, mapFiles } = status.features;
+  /** Swaps a layer with the next one shown above or below it. Hidden layers keep their place. */
+  const move = (id: string, d: number) => {
+    const shown = states.filter((l) => rides || config.layers.find((x) => x.id === l.id)?.type !== 'heatmap');
+    const other = shown[shown.findIndex((l) => l.id === id) + d];
+    if (!other) return;
+    const a = states.findIndex((l) => l.id === id), b = states.findIndex((l) => l.id === other.id);
+    const ls = [...states];
+    [ls[a], ls[b]] = [ls[b]!, ls[a]!];
+    p.change(ls);
+  };
+  return (
+    <>
       <h2>Layers</h2>
       <p className="small">The top of the list is drawn on top.</p>
       <ul className="layers">
@@ -186,32 +231,25 @@ export function Sidebar(p: Props) {
         <button disabled={p.adding} onClick={p.addMap}>{p.adding ? 'Adding map…' : 'Add map'}</button>
         <p className="small">Or drop a map file on the window.</p>
       </>}
-
-      {rides && <Zones {...p} report={report} />}
-
-      <AreaList
-        areas={p.areas} groups={p.groups} edit={p.editArea} editGroup={p.editGroup} editMembers={p.editMembers}
-        drawing={p.drawing} drawShape={p.drawShape} drawGroup={p.drawGroup} startDrawing={p.startDrawing} report={report} list={p.listArea}
-        go={(b) => { p.setScreen('map'); p.go(b); }}
-      />
-      <div className="planner-cta">
-        <button className="primary" disabled={!p.areas.some((a) => a.state === 'ready')} onClick={p.openPlanner}>Route planner →</button>
-        <p className="small">{p.areas.some((a) => a.state === 'ready') ? 'Plan routes in these areas that take in trails you haven\'t ridden.' : 'Draw an area first, then plan routes in it.'}</p>
-      </div>
-
-      {rides && <>
-        <h2>Times ridden</h2>
-        <ul className="legend">
-          {config.heatmap.bands.map((b, i) => (
-            <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{labels[i]}</li>
-          ))}
-        </ul>
-      </>}
-    </aside>
+    </>
   );
 }
 
-function Zones(p: Props & { report(r: Promise<{ ok: boolean; error?: string }>): Promise<boolean> }) {
+function Legend({ config }: { config: Config }) {
+  const labels = bandLabels(config.heatmap.bands);
+  return (
+    <>
+      <h2>Times ridden</h2>
+      <ul className="legend">
+        {config.heatmap.bands.map((b, i) => (
+          <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{labels[i]}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function Zones(p: Props & { report: Report }) {
   const zones = p.config.zones;
   const [edit, setEdit] = useState<{ id: string; name: string; radius: string } | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -265,7 +303,7 @@ function Zones(p: Props & { report(r: Promise<{ ok: boolean; error?: string }>):
 
 
 /** How many rides are on the map, and a checkbox for each kind of activity there is. */
-function ActivityFilter({ status, config, report }: { status: Status; config: Config; report(r: Promise<{ ok: boolean; error?: string }>): Promise<boolean> }) {
+function ActivityFilter({ status, config, report }: { status: Status; config: Config; report: Report }) {
   // Shown at once, before the file is saved and read back.
   const [pending, setPending] = useState<Activity[] | null>(null);
   const saved = config.heatmap.hide;

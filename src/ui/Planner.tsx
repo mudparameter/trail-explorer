@@ -12,8 +12,10 @@ import { PlanMap } from './PlanMap.tsx';
 import { planStyle, ROUTE_COLORS, RIDDEN_COLOR, RIDDEN_DARK, START_COLOR, FINISH_COLOR, type RiddenLook } from './planstyle.ts';
 import { pointAt, Profile } from './Profile.tsx';
 import { areaName, sizeLabel } from './Roads.tsx';
+import { useNarrow, useTouch } from './narrow.ts';
 
 type Step = 1 | 2 | 3 | 4;
+const STEP_TITLES: Record<Step, string> = { 1: 'Areas', 2: 'Start and finish', 3: 'Your ride', 4: 'Pick a route' };
 const NEW_TRAIL: { id: NewTrail; label: string; note: string }[] = [
   { id: 'little', label: 'A little', note: 'mostly trails you know' },
   { id: 'some', label: 'Some', note: 'about a quarter to a half new' },
@@ -82,6 +84,13 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
   const [hover, setHover] = useState<[number, number] | null>(null);
   const [baseMap, setBaseMap] = useState(false);
   const [fit, setFit] = useState<Bounds | null>(null);
+  const narrow = useNarrow();
+  const tap = useTouch() ? 'Tap' : 'Click';
+  /** On a phone the steps are a sheet under the map, put away while placing points. */
+  const [sheet, setSheet] = useState(true);
+  useEffect(() => {
+    if (narrow) setSheet(!clicking);
+  }, [clicking, narrow]);
 
   useEffect(() => trail.onPlanProgress(setProgress), []);
   useEffect(() => {
@@ -213,10 +222,16 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
         <strong>Route planner</strong>
         <span className="small">{rides ? 'Routes in your areas that mix trails you know with ones you don\'t.' : 'Routes in your areas, worked out on your computer.'} Nothing here changes the main map.</span>
         <button onClick={showRoutes}>Saved routes</button>
-        <button onClick={exit}>← Back to the map</button>
+        <button onClick={exit}>{narrow ? '← Map' : '← Back to the map'}</button>
       </header>
       <div className="planner-body">
-        <aside className="side plan-side" aria-label="Route planner steps">
+        <aside className={`side plan-side${narrow && !sheet ? ' collapsed' : ''}`} aria-label="Route planner steps">
+          {narrow && (
+            <button className="sheet-toggle" aria-expanded={sheet} onClick={() => setSheet(!sheet)}>
+              <span className="num">{step}</span> {STEP_TITLES[step]}
+              <span className="small">{sheet ? 'Show more map ▾' : 'Show the steps ▴'}</span>
+            </button>
+          )}
           <section className="step">
             {head(1, 'Areas', `${chosen.size} area${chosen.size === 1 ? '' : 's'}${net ? ` · ${distance(net.total)} of paths${rides ? `, ${pct(net.ridden / (net.total || 1))} ridden` : ''}` : ''}`)}
             {step === 1 && (
@@ -277,7 +292,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                   <label><input type="radio" checked={!loop} onChange={() => { setLoop(false); if (start && !finish) setClicking('finish'); }} /> From a start to a finish</label>
                 </div>
                 <p className="small" role="status">
-                  {clicking === 'start' ? 'Click the map to place the start.' : clicking === 'finish' ? 'Now click the map to place the finish.' : 'Placed. Move a point, or go on.'}
+                  {clicking === 'start' ? `${tap} the map to place the start.` : clicking === 'finish' ? `Now ${tap.toLowerCase()} the map to place the finish.` : 'Placed. Move a point, or go on.'}
                 </p>
                 <div className="row">
                   <button onClick={() => setClicking('start')} disabled={clicking === 'start'}><span className="dot" style={{ background: START_COLOR }} /> {start ? 'Move start' : 'Place start'}</button>
@@ -416,7 +431,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
             {head(4, 'Pick a route', `${routes.length} routes`)}
             {step === 4 && (
               <>
-                <p className="small">Click a route to see it. Save the ones you like; they go to Saved routes.</p>
+                <p className="small">{tap} a route to see it. Save the ones you like; they go to Saved routes.</p>
                 {(() => {
                   const want = Number(dist) * (distUnit === 'mi' ? 1609.344 : 1000);
                   const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
@@ -430,7 +445,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 <ol className="route-cards">
                   {routes.map((r, i) => (
                     <RouteCard key={r.id} route={r} color={ROUTE_COLORS[i % ROUTE_COLORS.length]!} on={r.id === selected}
-                      select={() => setSelected(r.id)} showProfile={() => { setSelected(r.id); setProfile(true); }} />
+                      select={() => setSelected(r.id)} showProfile={() => { setSelected(r.id); setProfile(true); if (narrow) setSheet(false); }} />
                   ))}
                 </ol>
                 {asked?.magic && difficulty && (() => {
@@ -489,7 +504,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
           </div>
         </aside>
         <div className="main">
-          {clicking && <div className="notice" role="status">Click the map to place the {clicking}. <button onClick={() => setClicking(null)}>Cancel</button></div>}
+          {clicking && <div className="notice" role="status">{tap} the map to place the {clicking}. <button onClick={() => setClicking(null)}>Cancel</button></div>}
           <div className="map-wrap">
             <PlanMap style={style} bounds={fit} clicking={clicking} onClick={clicked} onPickRoute={setSelected} hover={hover} />
           </div>

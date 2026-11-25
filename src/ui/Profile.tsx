@@ -57,7 +57,7 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
     const a = Math.max(0, d - 25), b = Math.min(dist, d + 25);
     return b > a ? ((eleAt(b) - eleAt(a)) / (b - a)) * 100 : 0;
   };
-  const move = (e: React.MouseEvent<SVGSVGElement>) => {
+  const move = (e: React.PointerEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const px = ((e.clientX - r.left) / (r.width || 1)) * W;
     const d = Math.max(0, Math.min(dist, ((px - L) / (W - L - R)) * dist));
@@ -76,7 +76,7 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
   const ftTicks = ticks(lo * 3.28084, hi * 3.28084, 4);
   return (
     <figure className="profile" ref={box}>
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Elevation profile" onMouseMove={move} onMouseLeave={leave}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Elevation profile" onPointerMove={move} onPointerDown={move} onPointerLeave={(e) => e.pointerType === 'mouse' && leave()}>
         {stats.steepUp.map((s, i) => <rect key={`u${i}`} x={x(s.from)} width={Math.max(1, x(s.to) - x(s.from))} y={T} height={H - T - B} className="steep-up" />)}
         {stats.steepDown.map((s, i) => <rect key={`d${i}`} x={x(s.from)} width={Math.max(1, x(s.to) - x(s.from))} y={T} height={H - T - B} className="steep-down" />)}
         <path d={view.area} className="ground" />
@@ -99,7 +99,7 @@ export function Profile({ stats, onHover }: { stats: RouteStats; onHover?(d: num
       </svg>
       <figcaption className="small">
         {at === null ? (
-          <>Hover for details. Shaded: climbs <span className="key steep-up" /> and descents <span className="key steep-down" /> of {STEEP}% or more over 50 m.</>
+          <>Hover or touch for details. Shaded: climbs <span className="key steep-up" /> and descents <span className="key steep-down" /> of {STEEP}% or more over 50 m.</>
         ) : (
           <>
             {fmt(at / 1000, 2)} km ({fmt(at / 1609.344, 2)} mi) · {fmt(eleAt(at))} m ({fmt(eleAt(at) * 3.28084)} ft) · {gradeAt(at) >= 0 ? '+' : ''}{fmt(gradeAt(at), 1)}%

@@ -5,7 +5,9 @@ const { app, BrowserWindow } = require('electron');
 
 app.setPath('userData', process.env.WEB_TEST_DATA);
 app.whenReady().then(() => {
-  const w = new BrowserWindow({ width: 1280, height: 860, webPreferences: { sandbox: true, contextIsolation: true } });
+  // WEB_TEST_SIZE, such as 390x844, makes a phone-sized window.
+  const [width, height] = (process.env.WEB_TEST_SIZE ?? '1280x860').split('x').map(Number);
+  const w = new BrowserWindow({ width, height, useContentSize: true, webPreferences: { sandbox: true, contextIsolation: true } });
   // The page asks before closing with unexported changes; tests close it anyway.
   w.webContents.on('will-prevent-unload', (e) => e.preventDefault());
   void w.loadURL(process.env.WEB_TEST_URL);

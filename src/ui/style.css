@@ -178,3 +178,76 @@ table.routes .name input { min-width: 160px; }
 .ride .magic-note { border: 1px solid #c4b5fd; background: #faf5ff; border-radius: 6px; padding: 6px 10px; margin: 0; }
 .ride .magic-go { background: #7c3aed; color: #fff; border-color: #6d28d9; }
 .plan-key label { display: block; margin-top: 4px; }
+
+/* --- Phone layout: the map fills the screen, tabs along the bottom open each part as a full-screen sheet --- */
+.te { height: 100%; }
+.te > .page { height: 100%; }
+.notices { display: contents; }
+.narrow { font-size: 15px; }
+.narrow h1 { font-size: 19px; }
+.narrow h2 { font-size: 15px; }
+.narrow .small { font-size: 13px; }
+/* 16px stops phones zooming in on a field when it is tapped. */
+.narrow input, .narrow select, .narrow textarea { font-size: 16px; }
+.narrow button { min-height: 38px; padding: 6px 12px; font-size: 15px; }
+.narrow button.link { min-height: 0; padding: 6px 2px; }
+.narrow input[type='checkbox'], .narrow input[type='radio'] { width: 20px; height: 20px; margin: 0 6px 0 0; vertical-align: -4px; }
+.narrow input[type='range'] { height: 32px; }
+.narrow .order button { min-width: 40px; padding: 6px 0; }
+.narrow .row { gap: 8px 12px; }
+.narrow .layers li { padding: 10px 0; }
+.narrow .roads .road { padding: 8px 6px; }
+
+.app.mobile { flex-direction: column; position: relative; overflow: hidden; }
+.app.mobile > .main { position: relative; }
+.app.mobile .notices { display: flex; flex-direction: column; gap: 6px; position: absolute; top: 8px; left: 8px; right: 58px; z-index: 3; pointer-events: none; }
+.app.mobile .notices .notice { pointer-events: auto; border: 1px solid #e0c96a; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18); padding: 8px 12px; }
+.sheet { position: absolute; inset: 0; z-index: 5; background: #fff; display: flex; flex-direction: column; }
+.sheet-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 16px; border-bottom: 1px solid #ddd; background: #f7f7f5; }
+.sheet-head h1 { flex: 1; margin: 0; font-size: 17px; }
+.sheet-head .back { margin-left: -12px; }
+.sheet-head .done, .sheet-head .back { background: none; border: 0; color: #1d4ed8; font-weight: 600; cursor: pointer; }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sheet-body .page { max-width: none; padding: 8px 16px 28px; overflow: visible; }
+.sheet-body h1 { display: none; }
+.sheet-body .page > h2:first-child { margin-top: 6px; }
+.menu li button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid #e5e5e5; padding: 12px 0; cursor: pointer; }
+.menu li button > span:first-child { font-weight: 600; }
+.tabbar { display: flex; flex: none; border-top: 1px solid #ccc; background: #fff; padding-bottom: env(safe-area-inset-bottom); z-index: 6; }
+.narrow .tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; background: none; border: 0; padding: 6px 0 8px; min-height: 54px; font-size: 12px; line-height: 1.2; color: #555; cursor: pointer; }
+.tabbar .icon { font-size: 20px; line-height: 1.1; }
+.tabbar button[aria-current] { color: #1d4ed8; font-weight: 600; }
+.narrow .roads { top: auto; bottom: 30px; left: 8px; right: 8px; width: auto; max-height: 50%; border-radius: 12px; }
+.narrow .maplibregl-ctrl-group button { width: 40px; height: 40px; }
+
+/* The route planner: the map on top, the steps in a sheet under it that folds away. */
+.narrow .mode-bar { padding: 6px 10px; gap: 8px; }
+.narrow .mode-bar strong { flex: 1; }
+.narrow .mode-bar .small { display: none; }
+.narrow .planner-body { flex-direction: column; }
+.narrow .planner-body > .main { order: 1; flex: 1; min-height: 140px; }
+.narrow .plan-side { order: 2; width: auto; flex: none; max-height: 58%; border-right: 0; border-top: 1px solid #bbb; padding-top: 0; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08); }
+.narrow .plan-side.collapsed { overflow: hidden; padding-bottom: 0; }
+.narrow .plan-side.collapsed > :not(.sheet-toggle) { display: none; }
+.narrow .sheet-toggle { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; width: calc(100% + 24px); margin: 0 -12px; padding: 8px 12px; background: #f7f7f5; border: 0; border-bottom: 1px solid #ddd; font-weight: 600; text-align: left; color: #111; cursor: pointer; }
+.sheet-toggle .num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #1d4ed8; color: #fff; font-size: 12px; }
+.sheet-toggle .small { margin-left: auto; font-weight: normal; }
+.narrow .step > :not(.step-head), .narrow .route-cards, .narrow .form.ride { margin-left: 0; }
+.narrow .step-head .summary, .narrow .step-head .summary + .link { padding-left: 0; }
+.narrow .form.ride .row.distance input[type='number'] { width: 70px; }
+
+/* Saved routes: a card each instead of a table row. */
+.narrow table.routes, .narrow table.routes tbody { display: block; }
+.narrow table.routes thead { display: none; }
+.narrow table.routes tr { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+.narrow table.routes td { border: 0; padding: 0; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.narrow table.routes td::before { content: attr(data-label); color: #666; font-size: 13px; }
+.narrow table.routes td.name, .narrow table.routes td.actions { grid-column: 1 / -1; }
+.narrow table.routes td.name::before, .narrow table.routes td.actions::before { content: none; }
+.narrow table.routes td.name { font-weight: 600; }
+.narrow table.routes .actions .row { flex-wrap: wrap; }
+.narrow table.routes .name input { min-width: 0; }
+.narrow .route-map { height: 280px; }
+.narrow table.bands { display: block; max-width: 100%; overflow-x: auto; }
+.narrow .bands input[aria-label$='legend text'] { width: 110px; }
+.narrow .bands input[type='number'] { width: 56px; }

@@ -94,6 +94,14 @@ export function Help() {
   return (
     <main className="page">
       <h1>Help</h1>
+      <h2>On a phone</h2>
+      <p>
+        On a narrow screen the map fills the window. The tabs along the bottom open each part as a full-screen sheet: Layers has
+        your rides and the map layers, Areas has roads and trails, excluded zones and the route planner, Routes has saved routes,
+        and More has Customize, Settings and this help. Where this help mentions the sidebar, look in those tabs. Drawing a shape or
+        placing a zone closes the sheet so you can tap the map. In the route planner, the steps fold away under the map while you
+        place the start and finish; tap the bar with the step&apos;s name to show or hide them.
+      </p>
       <h2>Add a detailed map of a region</h2>
       <ol>
         <li>Go to <a href="https://extract.bbbike.org" target="_blank" rel="noreferrer">extract.bbbike.org</a>.</li>

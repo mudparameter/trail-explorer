@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AreasState, AreaView, Backup, Bounds, ConfigState, GroupView, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
 import { layerState, type Config, type LayerDef } from '../core/config.ts';
 import type { AreaEdit, GroupEdit } from '../core/areas.ts';
@@ -12,9 +12,16 @@ import { Planner } from './Planner.tsx';
 import { RoutesScreen } from './RoutesScreen.tsx';
 import { Help, KeyForm, Settings } from './Screens.tsx';
 import { RoadsPanel, sizeLabel } from './Roads.tsx';
-import { Sidebar } from './Sidebar.tsx';
+import { NarrowContext, useMeasureNarrow, useTouch } from './narrow.ts';
+import { Parts, Sidebar, type Props as SidebarProps } from './Sidebar.tsx';
 
-export type Screen = 'map' | 'routes' | 'customize' | 'settings' | 'help';
+/** What fills the window. layers, areas and more are the phone layout's sheets; the desktop shows them in the sidebar. */
+export type Screen = 'map' | 'routes' | 'customize' | 'settings' | 'help' | 'layers' | 'areas' | 'more';
+const PHONE_ONLY: Screen[] = ['layers', 'areas', 'more'];
+const TITLES: Record<Screen, string> = { map: 'Map', routes: 'Saved routes', customize: 'Customize', settings: 'Settings', help: 'Help', layers: 'Rides and layers', areas: 'Areas', more: 'More' };
+/** The phone layout's tabs: screen, label and icon. */
+const TABS: [Screen, string, string][] = [['map', 'Map', '◎'], ['layers', 'Layers', '≋'], ['areas', 'Areas', '◯'], ['routes', 'Routes', '↝'], ['more', 'More', '⋯']];
+const MORE_NOTES: Partial<Record<Screen, string>> = { customize: 'Colours, layers, outline, and your config as a .zip', settings: 'Ride data and version', help: 'How everything works' };
 /** Clicking the map places a new zone, or moves one. */
 export type Placing = { kind: 'new' } | { kind: 'move'; id: string } | null;
 
@@ -67,6 +74,18 @@ export function App() {
   const [layers, setLayers] = useState<LayerState[]>([]);
   const [bundled, setBundled] = useState<Bundled | null>(null);
   const [screen, setScreen] = useState<Screen>('map');
+  const [measure, narrow] = useMeasureNarrow();
+  const touch = useTouch();
+  const tap = touch ? 'Tap' : 'Click';
+  // The phone layout's sheets are in the sidebar on a wider screen.
+  useEffect(() => {
+    if (!narrow && PHONE_ONLY.includes(screen)) setScreen('map');
+  }, [narrow, screen]);
+  const wrap = (x: ReactNode) => (
+    <div className={`te${narrow ? ' narrow' : ''}`} ref={measure}>
+      <NarrowContext.Provider value={narrow}>{x}</NarrowContext.Provider>
+    </div>
+  );
   /** The route planner fills the window in place of everything else. */
   const [planning, setPlanning] = useState(false);
   const [goTo, setGoTo] = useState<{ bounds: Bounds | View; n: number } | null>(null);
@@ -292,108 +311,183 @@ export function App() {
     setSelected(key);
     if (key) setListed(key.slice(0, key.indexOf(KEY_SEP)));
   };
-  if (!status || !saved || !cfg || !shown || !style) return null;
+  if (!status || !saved || !cfg || !shown || !style) return wrap(null);
 
   if (status.features.garmin && !status.hasKey && status.sync.total === 0 && screen === 'map') {
-    return (
+    return wrap(
       <main className="page">
         <h1>Trail Explorer</h1>
         <p>See everywhere you have ridden on one map. To start, the app needs your Garmin personal API key.</p>
         <KeyForm />
-      </main>
+      </main>,
     );
   }
 
   if (planning) {
-    return (
+    return wrap(
       <Planner config={shown} maps={cfg.maps} bundled={bundled!} areas={areas} groups={groups} rides={status.features.rides}
-        exit={() => { setPlanning(false); setScreen('map'); }} showRoutes={() => { setPlanning(false); setScreen('routes'); }} />
+        exit={() => { setPlanning(false); setScreen('map'); }} showRoutes={() => { setPlanning(false); setScreen('routes'); }} />,
     );
   }
 
   const daysLeft = status.keyExpires ? Math.ceil((Date.parse(status.keyExpires) - Date.now()) / 86_400_000) : null;
   const m = shown.map;
-  return (
-    <div
-      className="app"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        const f = e.dataTransfer.files[0];
-        if (f) void addMap(f);
-      }}
-    >
-      <Sidebar
-        status={status} cfg={cfg} config={shown} adding={adding} screen={screen} setScreen={setScreen} change={change} go={go}
-        goToRides={goToRides} addMap={() => void addMap()} notice={setNotice}
-        showZones={showZones} setShowZones={toggleZones} placing={placing}
-        setPlacing={(p) => { setScreen('map'); setDrawing(false); setPlacing(p); }}
-        drawing={drawing} drawShape={drawShape} drawGroup={drawGroup} startDrawing={startDrawing} areas={areas} groups={groups} editArea={editArea} editGroup={editGroup} editMembers={editMembers}
-        openPlanner={() => { setDrawing(false); setPlacing(null); setPlanning(true); }}
-        listArea={(id) => { setScreen('map'); setSelected(null); setListed(id); }}
+  const onMap = screen === 'map';
+  const sidebar: SidebarProps = {
+    status, cfg, config: shown, adding, screen, setScreen, change, go, goToRides, addMap: () => void addMap(), notice: setNotice,
+    showZones, setShowZones: toggleZones, placing, setPlacing: (p) => { setScreen('map'); setDrawing(false); setPlacing(p); },
+    drawing, drawShape, drawGroup, startDrawing, areas, groups, editArea, editGroup, editMembers,
+    openPlanner: () => { setDrawing(false); setPlacing(null); setPlanning(true); },
+    listArea: (id) => { setScreen('map'); setSelected(null); setListed(id); },
+  };
+  /** Notices about the whole app. On a phone they are shown over the map only. */
+  const appNotices = (
+    <>
+      {status.keyProblem && screen !== 'settings' && (
+        <div className="notice">{status.keyProblem} Your map still works. <button onClick={() => setScreen('settings')}>Enter a new key</button></div>
+      )}
+      {!status.keyProblem && status.hasKey && daysLeft !== null && daysLeft <= 14 && screen !== 'settings' && (
+        <div className="notice">
+          Your Garmin key {daysLeft <= 0 ? 'has expired' : `expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`}. <button onClick={() => setScreen('settings')}>Replace it</button>
+        </div>
+      )}
+      {status.backup && screen !== 'customize' && remind(status.backup) && (
+        <div className="notice" role="status">
+          {status.backup.unsaved} change{status.backup.unsaved === 1 ? '' : 's'} to your config {status.backup.unsaved === 1 ? 'is' : 'are'} only in this browser,
+          which can lose them. Save a copy to a file.{' '}
+          <button onClick={() => void trail.exportConfig()}>Export config</button>{' '}
+          <button onClick={() => setScreen('customize')}>More</button>
+        </div>
+      )}
+      {cfg.problems.length > 0 && screen !== 'customize' && (
+        <div className="notice">
+          The config folder has {cfg.problems.length} problem{cfg.problems.length === 1 ? '' : 's'}. <button onClick={() => setScreen('customize')}>Show</button>
+        </div>
+      )}
+    </>
+  );
+  /** What clicking the map does now, if anything. */
+  const mapNotices = onMap && (
+    <>
+      {placing && (
+        <div className="notice" role="status">
+          {tap} the map where the zone should {placing.kind === 'new' ? 'go' : 'move to'}. <button onClick={() => setPlacing(null)}>Cancel</button>
+        </div>
+      )}
+      {drawing && (
+        <div className="notice" role="status">
+          {/* A finger can't hover, so there is no size to show until the second tap. */}
+          {drawShape === 'circle'
+            ? (sketch ? (touch ? 'Now tap the edge of the area to finish.' : `${sizeLabel(sketch)}. Click again to finish.`) : `${tap} the centre of the area to search.`)
+            : (sketch ? (touch ? 'Now tap the opposite corner to finish.' : `${sizeLabel(sketch)}. Click the opposite corner to finish.`) : `${tap} one corner of the area to search.`)}
+          {drawGroup && ` It goes in ${groups.find((g) => g.id === drawGroup)?.name ?? 'the group'}.`}
+          {' '}<button onClick={() => setDrawing(false)}>Cancel</button>
+        </div>
+      )}
+    </>
+  );
+  const alert = notice && <div className="notice" role="alert">{notice} <button onClick={() => setNotice(null)}>Close</button></div>;
+  const mapArea = (
+    <div className="map-wrap">
+      <MapView
+        style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
+        placing={placing !== null} onPlace={(at) => void place(at)} locate={narrow}
+        drawing={drawing} drawShape={drawShape} onDrawn={(s) => void drawn(s)} onDrawShape={setDrawn} onPickRoad={pick}
+        goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
       />
-      <div className="main">
-        {status.keyProblem && screen !== 'settings' && (
-          <div className="notice">{status.keyProblem} Your map still works. <button onClick={() => setScreen('settings')}>Enter a new key</button></div>
-        )}
-        {!status.keyProblem && status.hasKey && daysLeft !== null && daysLeft <= 14 && screen !== 'settings' && (
-          <div className="notice">
-            Your Garmin key {daysLeft <= 0 ? 'has expired' : `expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`}. <button onClick={() => setScreen('settings')}>Replace it</button>
-          </div>
-        )}
-        {status.backup && screen !== 'customize' && remind(status.backup) && (
-          <div className="notice" role="status">
-            {status.backup.unsaved} change{status.backup.unsaved === 1 ? '' : 's'} to your config {status.backup.unsaved === 1 ? 'is' : 'are'} only in this browser,
-            which can lose them. Save a copy to a file.{' '}
-            <button onClick={() => void trail.exportConfig()}>Export config</button>{' '}
-            <button onClick={() => setScreen('customize')}>More</button>
-          </div>
-        )}
-        {cfg.problems.length > 0 && screen !== 'customize' && (
-          <div className="notice">
-            The config folder has {cfg.problems.length} problem{cfg.problems.length === 1 ? '' : 's'}. <button onClick={() => setScreen('customize')}>Show</button>
-          </div>
-        )}
-        {placing && screen === 'map' && (
-          <div className="notice" role="status">
-            Click the map where the zone should {placing.kind === 'new' ? 'go' : 'move to'}. <button onClick={() => setPlacing(null)}>Cancel</button>
-          </div>
-        )}
-        {drawing && screen === 'map' && (
-          <div className="notice" role="status">
-            {drawShape === 'circle'
-              ? (sketch ? `${sizeLabel(sketch)}. Click again to finish.` : 'Click the centre of the area to search.')
-              : (sketch ? `${sizeLabel(sketch)}. Click the opposite corner to finish.` : 'Click one corner of the area to search.')}
-            {drawGroup && ` It goes in ${groups.find((g) => g.id === drawGroup)?.name ?? 'the group'}.`}
-            {' '}<button onClick={() => setDrawing(false)}>Cancel</button>
-          </div>
-        )}
-        {offline && <div className="notice">{offline}</div>}
-        {notice && <div className="notice" role="alert">{notice} <button onClick={() => setNotice(null)}>Close</button></div>}
-        {screen === 'map' && (
-          <div className="map-wrap">
-            <MapView
-              style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
-              placing={placing !== null} onPlace={(at) => void place(at)}
-              drawing={drawing} drawShape={drawShape} onDrawn={(s) => void drawn(s)} onDrawShape={setDrawn} onPickRoad={pick}
-              goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
-            />
-            {listedArea && (
-              <RoadsPanel
-                area={listedArea} roads={roads[listedArea.id]?.roads ?? null} report={report} go={go}
-                setHide={(hide) => (listedGroup ? editMembers(listedGroup, { hide }) : editArea(listedArea.id, { hide }))}
-                selected={selected?.startsWith(listedArea.id + KEY_SEP) ? selected.slice(listedArea.id.length + 1) : null}
-                select={(k) => setSelected(k ? listedArea.id + KEY_SEP + k : null)}
-                close={() => { setListed(null); setSelected(null); }}
-              />
-            )}
-          </div>
-        )}
-        {screen === 'customize' && <Customize cfg={cfg} status={status} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
-        {screen === 'routes' && <RoutesScreen config={shown} maps={cfg.maps} bundled={bundled!} plan={() => setPlanning(true)} />}
-        {screen === 'settings' && <Settings status={status} />}
-        {screen === 'help' && <Help />}
-      </div>
+      {listedArea && (
+        <RoadsPanel
+          area={listedArea} roads={roads[listedArea.id]?.roads ?? null} report={report} go={go}
+          setHide={(hide) => (listedGroup ? editMembers(listedGroup, { hide }) : editArea(listedArea.id, { hide }))}
+          selected={selected?.startsWith(listedArea.id + KEY_SEP) ? selected.slice(listedArea.id.length + 1) : null}
+          select={(k) => setSelected(k ? listedArea.id + KEY_SEP + k : null)}
+          close={() => { setListed(null); setSelected(null); }}
+        />
+      )}
     </div>
+  );
+  const page = (s: Screen) => (
+    <>
+      {s === 'customize' && <Customize cfg={cfg} status={status} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
+      {s === 'routes' && <RoutesScreen config={shown} maps={cfg.maps} bundled={bundled!} plan={() => setPlanning(true)} />}
+      {s === 'settings' && <Settings status={status} />}
+      {s === 'help' && <Help />}
+    </>
+  );
+  const drop = {
+    onDragOver: (e: React.DragEvent) => e.preventDefault(),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const f = e.dataTransfer.files[0];
+      if (f) void addMap(f);
+    },
+  };
+
+  if (narrow) {
+    const more = screen === 'more' || screen === 'customize' || screen === 'settings' || screen === 'help';
+    const tab = more ? 'more' : screen;
+    return wrap(
+      <div className="app mobile" {...drop}>
+        <div className="main">
+          {mapArea}
+          {onMap && (
+            <div className="notices">
+              {appNotices}
+              {mapNotices}
+              {offline && <div className="notice">{offline}</div>}
+              {alert}
+            </div>
+          )}
+          {!onMap && (
+            <section className="sheet" aria-label={TITLES[screen]}>
+              <header className="sheet-head">
+                {more && screen !== 'more' && <button className="back" onClick={() => setScreen('more')}>‹ More</button>}
+                <h1>{TITLES[screen]}</h1>
+                <button className="done" onClick={() => setScreen('map')}>Done</button>
+              </header>
+              <div className="sheet-body">
+                {alert}
+                {screen === 'layers' && <div className="page"><Parts p={sidebar} show={['rides', 'layers', 'legend']} /></div>}
+                {screen === 'areas' && <div className="page"><Parts p={sidebar} show={['areas', 'zones']} /></div>}
+                {screen === 'more' && (
+                  <div className="page">
+                    <ul className="menu">
+                      {(['customize', 'settings', 'help'] as const).map((s) => (
+                        <li key={s}><button onClick={() => setScreen(s)}><span>{TITLES[s]}</span><span className="small">{MORE_NOTES[s]}</span></button></li>
+                      ))}
+                    </ul>
+                    <p className="small">Trail Explorer {status.version}</p>
+                  </div>
+                )}
+                {page(screen)}
+              </div>
+            </section>
+          )}
+        </div>
+        <nav className="tabbar" aria-label="Main">
+          {TABS.map(([t, label, icon]) => (
+            <button key={t} aria-current={tab === t ? 'page' : undefined} onClick={() => setScreen(tab === t && t !== 'map' ? 'map' : t)}>
+              <span className="icon" aria-hidden="true">{icon}</span>{label}
+            </button>
+          ))}
+        </nav>
+      </div>,
+    );
+  }
+
+  return wrap(
+    <div className="app" {...drop}>
+      <Sidebar {...sidebar} />
+      <div className="main">
+        <div className="notices">
+          {appNotices}
+          {mapNotices}
+          {offline && <div className="notice">{offline}</div>}
+          {alert}
+        </div>
+        {onMap && mapArea}
+        {page(screen)}
+      </div>
+    </div>,
   );
 }
