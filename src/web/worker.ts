@@ -1,6 +1,11 @@
-// The website's planning worker, so the page never freezes while routes are
-// worked out. The same jobs as the desktop app's worker process.
+// The website's worker, so the page never freezes while rides are read, the
+// heatmap is drawn or routes are worked out. The same jobs as the desktop app's
+// worker process.
+import { HeatmapBuilder, toGeoJson } from '../core/heatmap.ts';
 import { magic, network, routes, setTileReader, type NetworkJob } from '../core/planjobs.ts';
+import { readFile } from '../core/ride.ts';
+import { unpackTrack } from '../core/track.ts';
+import { clipTrack, type Zone } from '../core/zones.ts';
 import { terrainTiles } from '../core/terrain.ts';
 import { get } from './idb.ts';
 import { tileKey } from './terrain.ts';
@@ -28,6 +33,14 @@ self.onmessage = async ({ data }: MessageEvent<{ id: number; job: string; payloa
       result = network(payload);
     } else if (job === 'planRoutes') result = routes(payload);
     else if (job === 'planMagic') result = magic(payload);
+    else if (job === 'readFile') result = await readFile(payload.name, payload.data);
+    else if (job === 'heatmap') {
+      const { tracks, zones, options } = payload as { tracks: Float64Array[]; zones: Zone[]; options: ConstructorParameters<typeof HeatmapBuilder>[0] };
+      const b = new HeatmapBuilder(options);
+      for (const t of tracks) b.addRide(clipTrack(unpackTrack(t), zones));
+      const h = b.finish();
+      result = { json: toGeoJson(h), focus: h.focus };
+    }
     else throw new Error(`Unknown job ${job}.`);
     self.postMessage({ id, result });
   } catch (e) {

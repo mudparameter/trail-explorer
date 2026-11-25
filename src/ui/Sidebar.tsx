@@ -112,9 +112,13 @@ export function Sidebar(p: Props) {
       {s.buildingHeatmap && <p className="small">Drawing the heatmap…</p>}
       {s.noGps > 0 && <p className="small">{s.noGps} without GPS skipped</p>}
       {s.failed > 0 && <p className="small">{s.failed} could not be read</p>}
-      <p className="small">Last sync: {ago(s.lastSync)}</p>
+      {status.features.garmin && <p className="small">Last sync: {ago(s.lastSync)}</p>}
+      {status.import?.state === 'reading' && <p className="small" role="status">Reading {status.import.file}: {status.import.added} new so far…</p>}
+      {!status.features.garmin && status.import && status.import.state !== 'reading' && <p className={`small${status.import.state === 'error' ? ' error' : ''}`} role="status">{status.import.message}</p>}
       <div className="row">
-        <button disabled={busy || !status.hasKey} onClick={() => void trail.syncNow()}>Sync now</button>
+        {status.features.garmin
+          ? <button disabled={busy || !status.hasKey} onClick={() => void trail.syncNow()}>Sync now</button>
+          : <button disabled={status.import?.state === 'reading'} onClick={() => void report(trail.importRides())}>Import rides…</button>}
         <button onClick={p.goToRides}>Go to my rides</button>
       </div>
       </>}

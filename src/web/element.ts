@@ -12,7 +12,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import maplibreCss from 'maplibre-gl/dist/maplibre-gl.css?inline';
 import appCss from '../ui/style.css?inline';
 import { App } from '../ui/App.tsx';
-import { useAssets, useTrail } from '../ui/api.ts';
+import { useAssets, useHeatmapSource, useTrail } from '../ui/api.ts';
 import { webTrail, type WebOptions } from './backend.ts';
 
 /** What the page around the app may change. */
@@ -38,7 +38,9 @@ export async function mount(el: HTMLElement, opts: MountOptions = {}): Promise<(
   let root: Root | null = null;
   started = (async () => {
     useAssets(opts.assets ?? new URL('.', import.meta.url).href);
-    useTrail(await webTrail(opts));
+    const web = await webTrail(opts);
+    useTrail(web.trail);
+    useHeatmapSource(web.heatmapUrl);
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `${maplibreCss}\n${appCss}\n${HOST_CSS}`;

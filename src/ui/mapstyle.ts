@@ -5,7 +5,7 @@ import type { AreaLine, Config } from '../core/config.ts';
 import { KINDS, roadsGeoJson, type Road } from '../core/roads.ts';
 import { shapeRing, unionEdge, type Shape } from '../core/shapes.ts';
 import { zonesGeoJson } from '../core/zones.ts';
-import { asset } from './api.ts';
+import { asset, heatmapUrl } from './api.ts';
 
 export const ZONES = 'zones';
 export const ZONE_COLOR = '#d0021b';
@@ -125,7 +125,7 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     const map = def.type === 'file' ? maps[def.id] : undefined;
     if (def.type === 'heatmap') {
       if (!rides) continue;
-      sources.heatmap = { type: 'geojson', data: asset('heatmap', `heatmap.json?v=${heatVersion}`), tolerance: 0.3, maxzoom: 15 };
+      sources.heatmap = { type: 'geojson', data: heatmapUrl(heatVersion), tolerance: 0.3, maxzoom: 15 };
       const width = widths([[2, 1.6], [9, 2], [13, 3.5], [16, 6], [19, 10]], def.width);
       const layout: any = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'n'] };
       const color: any = bands.length > 1 ? ['step', ['get', 'n'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;

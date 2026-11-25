@@ -1,11 +1,15 @@
 // The browser's own database, where the website keeps everything: the config
-// files, downloaded road data and elevation tiles. Nothing leaves the browser.
+// files, downloaded road data, elevation tiles and rides. Nothing leaves the browser.
 // Works in a page and in a worker.
 
 const NAME = 'trail-explorer';
-const VERSION = 1;
-/** files: config files by path. meta: small settings. osm: road data, a record per download. terrain: elevation tile PNGs. */
-export type StoreName = 'files' | 'meta' | 'osm' | 'terrain';
+const VERSION = 2;
+/**
+ * files: config files by path. meta: small settings. osm: road data, a record per
+ * download. terrain: elevation tile PNGs. rides: imported rides, without their
+ * tracks; tracks: each ride's track, by ride id, read only when needed.
+ */
+export type StoreName = 'files' | 'meta' | 'osm' | 'terrain' | 'rides' | 'tracks';
 
 let opening: Promise<IDBDatabase> | null = null;
 export function db(): Promise<IDBDatabase> {
@@ -13,10 +17,15 @@ export function db(): Promise<IDBDatabase> {
     const req = indexedDB.open(NAME, VERSION);
     req.onupgradeneeded = () => {
       const d = req.result;
-      for (const s of ['files', 'meta', 'terrain']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
+      // Each version only adds stores, so an older database upgrades in place.
+      for (const s of ['files', 'meta', 'terrain', 'rides', 'tracks']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if (!d.objectStoreNames.contains('osm')) d.createObjectStore('osm', { autoIncrement: true });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      // A newer version in another tab needs this one to let go, to upgrade.
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error ?? new Error('This browser would not open its storage.'));
     req.onblocked = () => reject(new Error('Trail Explorer is open in another tab with an older version. Close it and reload.'));
   });
@@ -61,4 +70,14 @@ export async function have(store: StoreName, keys: IDBValidKey[]): Promise<Set<I
   const os = (await db()).transaction(store).objectStore(store);
   const found = await Promise.all(keys.map((k) => done(os.count(k))));
   return new Set(keys.filter((_, i) => found[i]! > 0));
+}
+
+/** Empties stores, in one transaction. */
+export async function clear(stores: StoreName[]) {
+  const tx = (await db()).transaction(stores, 'readwrite');
+  for (const s of stores) tx.objectStore(s).clear();
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }

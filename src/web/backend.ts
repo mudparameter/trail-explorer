@@ -2,7 +2,8 @@
 // process does for the UI, done in the browser. The config, road data and
 // elevation are kept in the browser's database; road data comes straight from
 // Overpass, and route planning runs in a Web Worker. There is no server.
-// Garmin, rides and map files are left out for now (status.features says so).
+// Rides come from an export .zip read in the browser; Garmin sync and map files
+// are left out for now (status.features says so).
 import type {
   AreasState, ConfigFile, ConfigImport, ConfigState, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, TrailApi, View,
 } from '../core/api.ts';
@@ -19,7 +20,12 @@ import { isRouteId, parseRoutes, routeFile, ROUTES_FILE, routesText, type SavedR
 import { shapeBounds } from '../core/shapes.ts';
 import { terrainTiles } from '../core/terrain.ts';
 import type { Bounds } from '../core/api.ts';
+import { APP_ZONES } from '../core/config.ts';
+import { Importer } from '../core/importer.ts';
+import { addCircle, editCircle, removeZone } from '../core/zones.ts';
 import { ConfigStore } from './configstore.ts';
+import { BrowserRideStore } from './ridestore.ts';
+import { rideFilesIn } from './zipread.ts';
 import { get, put } from './idb.ts';
 import { BrowserWayStore } from './osmstore.ts';
 import { fetchTerrain } from './terrain.ts';
@@ -44,10 +50,11 @@ const result = async <T>(fn: () => Promise<T> | T): Promise<Result<T>> => {
 const notHere = async (): Promise<Result<never>> => ({ ok: false, error: 'This is not available on the website.' });
 
 /** Starts the backend: opens the browser's storage and reads the config. */
-export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
+export async function webTrail(opts: WebOptions = {}): Promise<{ trail: TrailApi; heatmapUrl(version: number): string }> {
   const files = new ConfigStore();
   const osm = new BrowserWayStore();
-  await Promise.all([files.open(), osm.open()]);
+  const rides = new BrowserRideStore();
+  await Promise.all([files.open(), osm.open(), rides.open()]);
   // Ask the browser not to clear the data when space is short. It may say no; reminders still cover that.
   void navigator.storage?.persist?.().catch(() => {});
 
@@ -60,13 +67,21 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
 
   let config: Config = DEFAULTS;
   let problems: Problem[] = [];
-  const status = (): Status => ({
-    features: { garmin: false, rides: false, mapFiles: false, storage: 'browser' },
-    backup: { ...files.backup },
-    hasKey: false, keyProblem: null, keyExpires: null,
-    sync: { state: 'idle', message: '', done: 0, total: 0, onMap: 0, noGps: 0, failed: 0, lastSync: null, buildingHeatmap: false },
-    activities: {}, import: null, heatmapVersion: 0, version: typeof __TRAIL_VERSION__ === 'string' ? __TRAIL_VERSION__ : 'web',
-  });
+  // The heatmap: drawn in the worker from the rides, kept in the browser's database, and shown from memory.
+  let heat = (await get<{ key: string; json: string; focus: Bounds | null; version: number }>('meta', 'heatmap')) ?? null;
+  let heatUrl: string | null = null;
+  let building = false, buildAgain = false;
+  const status = (): Status => {
+    const c = rides.counts();
+    return {
+      features: { garmin: false, rides: true, mapFiles: false, storage: 'browser' },
+      backup: { ...files.backup },
+      hasKey: false, keyProblem: null, keyExpires: null,
+      sync: { state: 'idle', message: '', done: c.done + c.noGps, total: c.done + c.noGps, onMap: c.done, noGps: c.noGps, failed: 0, lastSync: null, buildingHeatmap: building },
+      activities: rides.activityCounts(), import: importer.status, heatmapVersion: heat?.version ?? 0,
+      version: typeof __TRAIL_VERSION__ === 'string' ? __TRAIL_VERSION__ : 'web',
+    };
+  };
   const configState = (): ConfigState => ({ config, problems, dir: 'This browser', source: 'default', maps: {} });
 
   const fetchOverpass = (query: string) => overpass(opts.overpass ?? config.map.overpass, query, { fetch: (u, i) => fetch(u, i), online: () => navigator.onLine });
@@ -89,8 +104,8 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
     areas.set(config.areas, config.groups);
     emit(listeners.config, configState());
     emit(listeners.status, status());
+    if (heatKey() !== heat?.key) void buildHeatmap();
   };
-  reload();
 
   // Leaving with changes that are only in this browser: the browser asks first.
   addEventListener('beforeunload', (e) => {
@@ -134,6 +149,86 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
       worker!.postMessage({ id, job, payload });
     });
   };
+  /** Never draw without knowing every zone: the heatmap would show what they hide. */
+  const zonesBlocked = () => problems.some((p) => p.file.startsWith('zones/'));
+  /** Everything in the config that changes the heatmap, and how many rides there are. When it changes, the heatmap is drawn again. */
+  const heatKey = () => {
+    const { bands, radius, angle, step, hide } = config.heatmap;
+    const zones = config.zones.map((z) => (z.kind === 'circle' ? [z.center, z.radius] : z.polygons));
+    return JSON.stringify({ zones, bands: bands.map((b) => b.from), radius, angle, step, hide: [...hide].sort(), rides: rides.counts().done });
+  };
+  async function buildHeatmap() {
+    if (zonesBlocked()) return;
+    if (building) {
+      buildAgain = true;
+      return;
+    }
+    building = true;
+    emit(listeners.status, status());
+    try {
+      do {
+        buildAgain = false;
+        if (zonesBlocked()) break;
+        const key = heatKey();
+        const { bands, radius, angle, step } = config.heatmap;
+        const out = await runJob<{ json: string; focus: Bounds | null }>('heatmap', {
+          tracks: await rides.tracks(config.heatmap.hide), zones: config.zones, options: { radius, angle, step, bands: bands.map((b) => b.from) },
+        });
+        heat = { key, json: out.json, focus: out.focus, version: (heat?.version ?? 0) + 1 };
+        await put('meta', [['heatmap', heat]]);
+        // The map may still read the old one until it gets the new style, so it goes a little later.
+        const old = heatUrl;
+        if (old) setTimeout(() => URL.revokeObjectURL(old), 60_000);
+        heatUrl = null;
+        await saveSaved({ focus: out.focus });
+      } while (buildAgain);
+    } catch (e) {
+      console.error('Heatmap build failed:', e);
+    } finally {
+      building = false;
+      emit(listeners.status, status());
+    }
+  }
+  const heatmapUrl = () => {
+    heatUrl ??= URL.createObjectURL(new Blob([heat?.json ?? '{"type":"FeatureCollection","features":[]}'], { type: 'application/json' }));
+    return heatUrl;
+  };
+
+  const importer = new Importer({
+    store: rides,
+    // A copy of the bytes goes to the worker, so the export's own buffer is never moved.
+    readFile: (name, data) => runJob('readFile', { name, data: data.slice() }),
+    ridesChanged: () => void buildHeatmap(),
+    changed: () => emit(listeners.status, status()),
+  });
+  /** Asks for an export .zip. Null when none is chosen. Must be called straight from a click. */
+  const pickZip = () => new Promise<File | null>((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip,application/zip';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      input.remove();
+      resolve(input.files?.[0] ?? null);
+    });
+    input.addEventListener('cancel', () => {
+      input.remove();
+      resolve(null);
+    });
+    document.body.append(input);
+    input.click();
+  });
+
+  const zoneEdit = (fn: (text: string | undefined) => string) => result(async () => {
+    await files.write(APP_ZONES, fn(files.read(APP_ZONES)));
+    reload();
+  });
+  const appZone = (id: unknown): number => {
+    const z = config.zones.find((x) => x.id === id);
+    if (!z || z.file !== APP_ZONES) throw new Error('That zone is in a file the app does not change. Export the config to edit it.');
+    return z.index;
+  };
+
   let planned: PlannedRoute[] = [];
   let preparing = 0;
 
@@ -150,13 +245,28 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
     return next;
   };
 
-  const saved = async (): Promise<Saved> => ({ view: null, focus: null, showZones: false, ...((await get<Partial<Saved>>('meta', 'saved')) ?? {}) });
+  const saved = async (): Promise<Saved> => ({ view: null, focus: null, showZones: true, ...((await get<Partial<Saved>>('meta', 'saved')) ?? {}) });
   const saveSaved = async (s: Partial<Saved>) => put('meta', [['saved', { ...(await saved()), ...s }]]);
 
-  return {
+  reload();
+
+  const trail: TrailApi = {
     getStatus: async () => status(),
     onStatus: (fn) => on('status', fn),
-    saveKey: notHere, setKeyExpires: notHere, removeKey: notHere, syncNow: notHere, importRides: notHere, deleteRides: notHere,
+    saveKey: notHere, setKeyExpires: notHere, removeKey: notHere, syncNow: notHere,
+    importRides: async () => {
+      if (importer.status?.state === 'reading') return { ok: false, error: 'An import is already running.' };
+      const file = await pickZip();
+      if (!file) return { ok: true, value: null };
+      return result(() => importer.run(file.name, () => rideFilesIn(file)));
+    },
+    deleteRides: () => result(async () => {
+      if (importer.status?.state === 'reading') throw new Error('Wait for the import to finish first.');
+      await rides.deleteAll();
+      await saveSaved({ focus: null });
+      void buildHeatmap();
+      emit(listeners.status, status());
+    }),
     getConfig: async () => configState(),
     onConfig: (fn) => on('config', fn),
     saveConfig: (file, value) => result(async () => {
@@ -166,7 +276,9 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
     }),
     saveLayers: (ls) => result(() => writeLayers(E.layersFromState(config.layers, ls))),
     pickMap: notHere, addDroppedMap: notHere, renameMap: notHere, removeMap: notHere,
-    addZone: notHere, editZone: notHere, removeZone: notHere,
+    addZone: (z) => zoneEdit((t) => addCircle(t, { name: z?.name, center: z?.center, radius: z?.radius })),
+    editZone: (id, e) => result(() => appZone(id)).then((r) => (r.ok ? zoneEdit((t) => editCircle(t, r.value, { name: e?.name, center: e?.center, radius: e?.radius })) : r)),
+    removeZone: (id) => result(() => appZone(id)).then((r) => (r.ok ? zoneEdit((t) => removeZone(t, r.value)) : r)),
     exportConfig: () => result(async () => {
       download(`trail-explorer-config-${new Date().toISOString().slice(0, 10)}.zip`, configZip(files.all()) as Uint8Array<ArrayBuffer>, 'application/zip');
       await files.exported();
@@ -185,7 +297,9 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
     saveView: async (v: View) => {
       if (Array.isArray(v?.center) && v.center.length === 2 && [...v.center, v.zoom].every(Number.isFinite)) await saveSaved({ view: { center: v.center, zoom: v.zoom } });
     },
-    saveShowZones: async () => {},
+    saveShowZones: async (on) => {
+      if (typeof on === 'boolean') await saveSaved({ showZones: on });
+    },
 
     getAreas: async () => areasState(),
     onAreas: (fn) => on('areas', fn),
@@ -245,7 +359,7 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
       if (n !== preparing) throw new Error('Replaced by a newer request.');
       progress({ stage: 'network', done: 0, total: 1 });
       const key = `${n}:${ids.join(',')}`;
-      const out = await runJob<NetworkResult>('planNetwork', { key, ways: [...ways.values()], shapes, tracks: [], bounds, terrain: 'browser' } satisfies NetworkJob);
+      const out = await runJob<NetworkResult>('planNetwork', { key, ways: [...ways.values()], shapes, tracks: await rides.tracks(config.heatmap.hide), bounds, terrain: 'browser' } satisfies NetworkJob);
       return { key, ...out, bounds, missingElevation };
     }),
     onPlanProgress: (fn) => on('plan', fn),
@@ -301,6 +415,7 @@ export async function webTrail(opts: WebOptions = {}): Promise<TrailApi> {
       return true;
     }),
   };
+  return { trail, heatmapUrl };
 }
 
 /** Hands the browser a file to save, as a download. */

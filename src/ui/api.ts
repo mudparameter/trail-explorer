@@ -21,3 +21,10 @@ export function useAssets(base: string) {
 }
 export const asset = (kind: 'styles' | 'sprites' | 'fonts' | 'heatmap' | 'maps', path: string) =>
   assetBase === null ? `trail://${kind}/${path}` : `${assetBase}${kind}/${path}`;
+
+/** Where the heatmap's GeoJSON is, by version. A file the desktop app serves; on the website, one the backend keeps in memory. */
+let heatSource: ((version: number) => string) | null = null;
+export function useHeatmapSource(fn: (version: number) => string) {
+  heatSource = fn;
+}
+export const heatmapUrl = (version: number) => (heatSource ? heatSource(version) : asset('heatmap', `heatmap.json?v=${version}`));

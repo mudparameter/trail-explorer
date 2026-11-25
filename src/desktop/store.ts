@@ -6,7 +6,8 @@ import { SAME_RIDE_MS, startMs } from '../core/import.ts';
 /** 'same' is a ride Garmin lists that was already imported from an export: it is never downloaded. */
 export type RideStatus = 'waiting' | 'done' | 'no-gps' | 'failed' | 'unread' | 'same';
 /** Ids of rides imported from an export start with this. Garmin's are all digits. */
-export const IMPORTED = 'file-';
+export { IMPORTED } from '../core/importer.ts';
+import { IMPORTED } from '../core/importer.ts';
 
 /** All database access. Nothing else imports node:sqlite for the app's own data. */
 export class Store {

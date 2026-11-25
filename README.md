@@ -121,7 +121,9 @@ Reading, checking and applying the config (`src/core/config.ts`, `src/core/zones
 
 ## Website
 
-Trail Explorer also runs as a website, for anyone to use without installing anything: draw areas, find roads and trails, plan routes (including long descents and magic routes), save them and download them as `.gpx`. There is no server and no account. Everything is kept in the visitor's own browser, in its IndexedDB storage, as the same files the desktop app keeps in its config folder. Garmin, rides, excluded zones and map files are not on the website yet.
+Trail Explorer also runs as a website, for anyone to use without installing anything: draw areas, find roads and trails, plan routes (including long descents and magic routes), save them and download them as `.gpx`. There is no server and no account. Everything is kept in the visitor's own browser, in its IndexedDB storage, as the same files the desktop app keeps in its config folder.
+
+**Rides on the website:** **Import rides…** in the sidebar reads an export `.zip`, such as Garmin's "Export your data" or Strava's, in the browser. Nothing is uploaded. The `.zip` is read a piece at a time, so exports of several GB work. Rides bring the heatmap, ridden and new trail in the planner, favourite trails and excluded zones, as in the desktop app. The rides stay in the browser; they are not part of the config export, so import the `.zip` again to have them elsewhere. Garmin sync with a key and map files are not on the website yet.
 
 **Building it:** `npm run build:web` writes a folder of static files to `out/web`. Put it on any web server, under any path, such as `https://example.com/trail/`.
 
@@ -171,7 +173,7 @@ It installs `/etc/apparmor.d/trail-explorer-dev` for this folder's copy of Elect
 | `SHOTS=folder node test/e2e.ts` | Drives the real app against a fake Garmin server and saves screenshots to `folder`. |
 | `node test/e2e-migrate.ts` | Checks that maps and layer settings from versions before the config folder move into it. |
 | `SHOTS=folder node test/e2e-planner.ts` | Drives the route planner against fake trail and elevation servers: plan, save, sort, rename, download and delete routes. |
-| `npm run build:web && SHOTS=folder node test/e2e-web.ts` | Drives the website as a page on another site would use it, in a plain Chromium window: areas, planning, saving, the save reminder, export, reload and import. |
+| `npm run build:web && SHOTS=folder node test/e2e-web.ts` | Drives the website as a page on another site would use it, in a plain Chromium window: areas, planning, saving, the save reminder, export, reload, import, rides from an export `.zip`, the heatmap and zones. |
 | `npm run check-garmin-key` | Tests a real Garmin key from the terminal: how far back rides go and how fast downloads are. |
 
 The development copy is named **Trail Explorer Dev**. It has its own data folder and keychain entry, so it never touches the installed app's rides or key. The first time you run `npm run dev`, it copies your rides and config folder (maps and zones included, never the key) from the installed app. Run `npm run dev -- --fresh-copy` to copy them again.

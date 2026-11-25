@@ -12,6 +12,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { _electron, type Page } from 'playwright-core';
 import electronPath from 'electron';
+import { fit } from './fake-garmin.ts';
 
 const shots = process.env.SHOTS ?? mkdtempSync(join(tmpdir(), 'te-shots-'));
 const K = 111320, C = Math.cos((39.7 * Math.PI) / 180);
@@ -126,11 +127,14 @@ const backup = () => w.evaluate(async () => {
 });
 
 try {
-  // The app starts in the page, with no Garmin key asked for, and nothing personal.
+  // The app starts in the page, with no Garmin key asked for.
   await w.getByRole('heading', { name: 'Roads and trails' }).waitFor({ timeout: 30000 });
   assert.equal(await w.getByLabel('Garmin personal API key').count(), 0, 'no Garmin key on the website');
-  assert.equal(await w.getByRole('heading', { name: 'Rides', exact: true }).count(), 0, 'no rides');
-  assert.equal(await w.getByRole('heading', { name: 'Excluded zones' }).count(), 0, 'no zones');
+  // Rides come from an export .zip, not Garmin sync.
+  await w.getByRole('button', { name: 'Import rides…' }).waitFor();
+  assert.equal(await w.getByRole('button', { name: 'Sync now' }).count(), 0, 'no Garmin sync');
+  await w.getByText('0 rides on the map').waitFor();
+  await w.getByRole('heading', { name: 'Excluded zones' }).waitFor();
   assert.equal(await w.getByRole('button', { name: 'Add map' }).count(), 0, 'no map files yet');
   // The host page's styles stay out: the app's buttons are not pink, and its text is not Georgia.
   const look = await w.getByRole('button', { name: 'Draw a circle' }).evaluate((b) => [getComputedStyle(b).backgroundColor, getComputedStyle(b).fontFamily]);
@@ -247,6 +251,66 @@ try {
   await w.getByLabel('Config .zip to import').setInputFiles({ name: 'bad.zip', mimeType: 'application/zip', buffer: Buffer.from('nope') });
   await w.getByRole('button', { name: 'Replace' }).click();
   await w.getByText('That file is not a .zip, or it is damaged.').waitFor();
+
+  // Rides from an export .zip, read in the browser: a Garmin-style export, rides in a zip inside it.
+  // Rows 2 to 8 ridden along their western half; row 4 four times, so it is a favourite.
+  const ride = (j: number) => Array.from({ length: 200 }, (_, i) => Q(-HALF + (i / 199) * HALF, j * GAP - HALF));
+  const rideFiles = Object.fromEntries([2, 4, 6, 8, 4, 4, 4].map((j, i) => [`a@b.c_${i}.fit`, fit(ride(j), `2025-0${i + 1}-01T08:00:00Z`)]));
+  const exportZip = zipSync({ 'DI_CONNECT/DI-Connect-Uploaded-Files/UploadedFiles_0-_Part1.zip': zipSync(rideFiles), 'media/photo.jpg': new Uint8Array(1000) });
+  await w.getByRole('button', { name: 'Map', exact: true }).click();
+  const chooser = w.waitForEvent('filechooser');
+  await w.getByRole('button', { name: 'Import rides…' }).click();
+  await (await chooser).setFiles({ name: 'export.zip', mimeType: 'application/zip', buffer: Buffer.from(exportZip) });
+  await w.getByText('7 new rides added.').waitFor({ timeout: 60000 });
+  await w.getByText('7 rides on the map').waitFor();
+  await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 13 }), MID);
+  await w.waitForFunction(() => (window as any).__map.getLayer('heat') && (window as any).__map.querySourceFeatures('heatmap').length > 0, null, { timeout: 30000 });
+  await w.waitForTimeout(600);
+  await shot('7-rides');
+  // The same .zip again adds nothing.
+  const again = w.waitForEvent('filechooser');
+  await w.getByRole('button', { name: 'Import rides…' }).click();
+  await (await again).setFiles({ name: 'export.zip', mimeType: 'application/zip', buffer: Buffer.from(exportZip) });
+  await w.getByText('0 new rides added, 7 rides already here.').waitFor({ timeout: 60000 });
+
+  // The planner knows what is ridden now, and offers favourites. The big area was left off above: choose it here.
+  await w.getByRole('button', { name: 'Route planner →' }).click();
+  await w.locator('ul.choose').getByLabel(/Imported hill/).check();
+  await w.getByRole('button', { name: 'Use these areas' }).click();
+  await w.getByText('Click the map to place the start.').first().waitFor({ timeout: 30000 });
+  const summary = await w.locator('.step').first().innerText();
+  const ridden = Number(summary.match(/(\d+)% ridden/)![1]);
+  console.log('ridden in the area:', ridden, '%');
+  assert.ok(ridden >= 2 && ridden < 50);
+  await w.waitForTimeout(500);
+  const pb2 = (await w.locator('.map').boundingBox())!;
+  const at2 = await w.evaluate(([x, y]) => (window as any).__planMap.project([x, y]), Q(-200, -150));
+  await w.mouse.click(pb2.x + at2.x, pb2.y + at2.y);
+  await w.getByLabel('Distance', { exact: true }).fill('6');
+  await w.getByLabel('Include my favourite trails').check();
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await w.locator('.route-card').first().getByText('Favourites').waitFor({ timeout: 60000 });
+  await w.getByRole('button', { name: '← Back to the map' }).click();
+
+  // An excluded zone, kept in the config like on the desktop.
+  await w.getByRole('button', { name: 'Add zone' }).click();
+  const mb2 = (await w.locator('.map').boundingBox())!;
+  await w.mouse.click(mb2.x + mb2.width / 2, mb2.y + mb2.height / 2);
+  await w.getByText('Zone 1').waitFor();
+  await w.getByRole('button', { name: 'Customize' }).click();
+  const zoneDown = nextDownload();
+  await w.getByRole('button', { name: 'Export config (.zip)' }).click();
+  const withZone = unzipSync(new Uint8Array((await zoneDown).bytes));
+  assert.match(strFromU8(withZone['zones/zones.geojson']!), /"Zone 1"/);
+  assert.ok(!Object.keys(withZone).some((f) => /fit|ride/i.test(f)), 'rides are not in the config');
+
+  // Rides are still there after closing the browser.
+  await app.close();
+  app = await launch();
+  w = await app.firstWindow();
+  watch();
+  await w.getByText('7 rides on the map').waitFor({ timeout: 30000 });
+  await w.getByText('Zone 1').waitFor();
 
   const bad = logs.filter((l) => !/Failed to load resource|could not be loaded|Expected value to be of type number/.test(l));
   if (bad.length) console.log('page errors:', bad);
