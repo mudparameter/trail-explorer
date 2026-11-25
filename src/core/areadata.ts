@@ -2,11 +2,26 @@
 // area holds. Data is fetched by tile, a few tiles at a time, and saved as each
 // part arrives: a big area survives a restart, and areas that overlap never wait
 // for or download the same tile twice.
-import type { AreaView, GroupView } from '../core/api.ts';
-import type { Area, AreaGroup } from '../core/areas.ts';
-import { KINDS, kindTotals, overpassQuery, parseOverpass, roadsIn, tilesFor, type Road, type RoadKind } from '../core/roads.ts';
-import type { OsmWay } from '../core/roads.ts';
-import type { OsmStore } from './osm.ts';
+import type { AreaView, GroupView } from './api.ts';
+import type { Area, AreaGroup } from './areas.ts';
+import { KINDS, kindTotals, overpassQuery, parseOverpass, roadsIn, tilesFor, type Road, type RoadKind } from './roads.ts';
+import type { OsmWay } from './roads.ts';
+import type { Shape } from './shapes.ts';
+
+/**
+ * Where downloaded road data is kept: SQLite on the desktop, IndexedDB in a
+ * browser. Reads are synchronous, so a browser store keeps what it has in memory.
+ */
+export interface WayStore {
+  /** Whether a tile has been downloaded. */
+  has(tile: number): boolean;
+  /** Saves ways downloaded for `tiles`, and marks the tiles as done. */
+  save(ways: OsmWay[], tiles: number[]): void;
+  /** Every way that may cross a shape, with its points. */
+  waysIn(shape: Shape): OsmWay[];
+  /** Drops every tile not in `keep`, and the ways only they used. Returns how many ways went. */
+  prune(keep: Set<number>): number;
+}
 
 /** Tiles per download. Small enough that a busy server still answers. */
 const PART = 16;
@@ -20,7 +35,7 @@ interface Cached {
 }
 
 export class Areas {
-  private store: OsmStore;
+  private store: WayStore;
   private fetch: (query: string) => Promise<unknown>;
   private changed: () => void;
   private areas: Area[] = [];
@@ -35,7 +50,7 @@ export class Areas {
   private version = 0;
   private stopped = false;
 
-  constructor(store: OsmStore, fetch: (query: string) => Promise<unknown>, changed: () => void) {
+  constructor(store: WayStore, fetch: (query: string) => Promise<unknown>, changed: () => void) {
     this.store = store;
     this.fetch = fetch;
     this.changed = changed;

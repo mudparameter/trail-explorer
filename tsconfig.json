@@ -4,5 +4,5 @@
     "types": ["node"], "jsx": "react-jsx", "strict": true, "noUncheckedIndexedAccess": true, "noEmit": true, "skipLibCheck": true,
     "allowImportingTsExtensions": true, "erasableSyntaxOnly": true, "verbatimModuleSyntax": true, "resolveJsonModule": true
   },
-  "include": ["src", "electron.vite.config.ts"]
+  "include": ["src", "electron.vite.config.ts", "vite.web.config.ts"]
 }

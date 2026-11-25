@@ -103,6 +103,7 @@ config/
 - **Mistakes:** every file and setting is optional. If a value is wrong, the app shows which file and setting, uses the default for just that setting, and keeps the rest.
 - **Comments:** any key starting with `//` is ignored, so `"//": "note to self"` works as a comment.
 - **Zones and privacy:** zones show where you live, so keep the folder private. If a zones file has a problem, the heatmap isn't redrawn until it's fixed, so nothing it should hide can show.
+- **Export and import:** **Customize → Export config (.zip)** saves the whole config as one `.zip`, without map files. **Import config…** replaces the files a `.zip` holds; a `.zip` of the folder itself works too. It is the same `.zip` the website uses, so a config moves between them.
 
 ### Road and trail data
 
@@ -117,6 +118,32 @@ An area downloads only the tiles it needs that aren't there yet, a few at a time
 [`config.example/`](config.example) has a complete example with every file. Its [README](config.example/README.md) documents every setting.
 
 Reading, checking and applying the config (`src/core/config.ts`, `src/core/zones.ts`, `src/core/roads.ts`) has no Electron or Node code in it, so a web version can use the same files.
+
+## Website
+
+Trail Explorer also runs as a website, for anyone to use without installing anything: draw areas, find roads and trails, plan routes (including long descents and magic routes), save them and download them as `.gpx`. There is no server and no account. Everything is kept in the visitor's own browser, in its IndexedDB storage, as the same files the desktop app keeps in its config folder. Garmin, rides, excluded zones and map files are not on the website yet.
+
+**Building it:** `npm run build:web` writes a folder of static files to `out/web`. Put it on any web server, under any path, such as `https://example.com/trail/`.
+
+**Putting it in a page on your site:** load the script and add the element. The app fills whatever size the page gives the element. It runs in a shadow root, so your page's styles and the app's never mix.
+
+```html
+<script type="module" src="/trail/trail-explorer.js"></script>
+<trail-explorer style="display: block; height: 80vh"></trail-explorer>
+```
+
+Map styles, sprites and fonts load from beside the script. To keep them somewhere else, give the folder as `<trail-explorer assets="https://cdn.example.com/trail/">`. Pages can also start it from code: `import { mount } from '/trail/trail-explorer.js'; await mount(element)`. There is one app per page. `out/web/index.html` is a ready page that fills the window.
+
+The element is for pages on the same site as the files. It needs the planning worker, which browsers only load from the page's own site.
+
+**Keeping the config:**
+
+- **Export and import:** **Customize → Export config (.zip)** saves the whole config as one `.zip`, laid out like the config folder: settings, areas and saved routes. **Import config…** replaces the files the `.zip` holds; map files are kept. The same `.zip` works in the desktop app and on the website, both ways.
+- **Reminders:** browsers can clear stored data. Safari does after about a week without a visit, and so do private windows or clearing site data. So the website counts changes not yet exported. Once there are 10, or the oldest is a day old, it shows a reminder to export, and the browser asks before the tab closes while any are unsaved.
+- **Downloads:** road data comes from the Overpass servers in `map.json`, straight from the visitor's browser. Elevation comes from the public terrain tiles, and maps from OpenFreeMap. Each is downloaded once and kept in the browser. The public Overpass server suits light use. For a busy site, run your own Overpass server, or a caching proxy, and set it in `map.json`.
+- **Separate copies:** each browser, and each site the app is on, keeps its own copy. Moving between them takes an export and an import.
+
+**Trying it locally:** `npm run web` serves it with hot reload at <http://127.0.0.1:5179>. `npm run preview:web` builds it and serves the build.
 
 ## Development
 
@@ -144,6 +171,7 @@ It installs `/etc/apparmor.d/trail-explorer-dev` for this folder's copy of Elect
 | `SHOTS=folder node test/e2e.ts` | Drives the real app against a fake Garmin server and saves screenshots to `folder`. |
 | `node test/e2e-migrate.ts` | Checks that maps and layer settings from versions before the config folder move into it. |
 | `SHOTS=folder node test/e2e-planner.ts` | Drives the route planner against fake trail and elevation servers: plan, save, sort, rename, download and delete routes. |
+| `npm run build:web && SHOTS=folder node test/e2e-web.ts` | Drives the website as a page on another site would use it, in a plain Chromium window: areas, planning, saving, the save reminder, export, reload and import. |
 | `npm run check-garmin-key` | Tests a real Garmin key from the terminal: how far back rides go and how fast downloads are. |
 
 The development copy is named **Trail Explorer Dev**. It has its own data folder and keychain entry, so it never touches the installed app's rides or key. The first time you run `npm run dev`, it copies your rides and config folder (maps and zones included, never the key) from the installed app. Run `npm run dev -- --fresh-copy` to copy them again.
@@ -156,9 +184,10 @@ App data is stored in:
 ### Layout
 
 ```
-src/core/      FIT parsing, tracks, heatmap builder, config and zones (no Electron)
+src/core/      FIT parsing, tracks, heatmap, config, areas, route planning (no Node, Electron or DOM)
 src/desktop/   Electron main process: Garmin sync, SQLite store, maps, key storage
-src/ui/        React renderer, MapLibre map
+src/web/       The website's backend: IndexedDB storage, planning worker, the <trail-explorer> element
+src/ui/        React UI, shared by both, MapLibre map
 resources/     Bundled map styles, sprites and fonts
 scripts/       Dev runner, sandbox setup, style generator, Garmin key check
 config.example/  A complete example config folder

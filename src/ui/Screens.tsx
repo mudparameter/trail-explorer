@@ -60,6 +60,7 @@ export function Settings({ status }: { status: Status }) {
   return (
     <main className="page">
       <h1>Settings</h1>
+      {status.features.garmin && <>
       <h2>Garmin key</h2>
       <p>{status.keyProblem ?? (status.hasKey ? 'A key is saved.' : 'No key is saved.')}</p>
       {status.hasKey && !form && (
@@ -75,11 +76,15 @@ export function Settings({ status }: { status: Status }) {
         </>
       )}
       {form && <KeyForm onSaved={() => setReplace(false)} />}
+      </>}
+      {status.features.rides && <>
       <ImportRides status={status.import} />
       <h2>Ride data</h2>
       <p>{status.sync.onMap} rides are stored on this computer.</p>
       <Confirm label="Delete all rides" question="Delete every ride from this computer? Garmin may only return about the last three years." action={() => trail.deleteRides()} />
-      <p className="small">While a key is saved, the next sync downloads rides again. Remove the key first to keep them deleted.</p>
+      {status.features.garmin && <p className="small">While a key is saved, the next sync downloads rides again. Remove the key first to keep them deleted.</p>}
+      </>}
+      {!status.features.rides && <p>Your areas, settings and saved routes are kept in this browser. Export or import them in Customize.</p>}
       <p className="small">Trail Explorer {status.version}</p>
     </main>
   );

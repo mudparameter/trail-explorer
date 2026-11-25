@@ -8,7 +8,7 @@ import { parseConfig } from '../src/core/config.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 import { tilesFor } from '../src/core/roads.ts';
 import { drawnShape, MAX_SIDE, rectFrom, rectSize, shapeProblem, unionEdge, type Shape } from '../src/core/shapes.ts';
-import { Areas } from '../src/desktop/areas.ts';
+import { Areas } from '../src/core/areadata.ts';
 import { OsmStore } from '../src/desktop/osm.ts';
 
 const C: [number, number] = [-0.47, 39.7];
