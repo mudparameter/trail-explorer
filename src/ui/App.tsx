@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AreasState, AreaView, Bounds, ConfigState, GroupView, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
 import { layerState, type Config, type LayerDef } from '../core/config.ts';
 import type { AreaEdit, GroupEdit } from '../core/areas.ts';
-import { distance, KINDS, MIN_AREA, type Road, type RoadKind } from '../core/roads.ts';
+import { KINDS, type Road, type RoadKind } from '../core/roads.ts';
+import { MIN_AREA, MIN_SIDE, shapeProblem, type Shape } from '../core/shapes.ts';
 import { trail } from './api.ts';
 import { Customize } from './Customize.tsx';
 import { buildStyle, KEY_SEP, type Bundled, type StyleArea } from './mapstyle.ts';
@@ -10,7 +11,7 @@ import { MapView } from './MapView.tsx';
 import { Planner } from './Planner.tsx';
 import { RoutesScreen } from './RoutesScreen.tsx';
 import { Help, KeyForm, Settings } from './Screens.tsx';
-import { RoadsPanel } from './Roads.tsx';
+import { RoadsPanel, sizeLabel } from './Roads.tsx';
 import { Sidebar } from './Sidebar.tsx';
 
 export type Screen = 'map' | 'routes' | 'customize' | 'settings' | 'help';
@@ -73,7 +74,9 @@ export function App() {
   const [showZones, setShowZones] = useState(true);
   const [placing, setPlacing] = useState<Placing>(null);
   const [drawing, setDrawing] = useState(false);
-  const [drawRadius, setDrawRadius] = useState<number | null>(null);
+  const [drawShape, setDrawShape] = useState<Shape['kind']>('circle');
+  /** The shape so far, once the first click is made. */
+  const [sketch, setDrawn] = useState<Shape | null>(null);
   const [drawGroup, setDrawGroup] = useState<string | null>(null);
   const [got, setGot] = useState<AreasState>({ areas: [], groups: [] });
   const [pendingNo, setPendingNo] = useState(0);
@@ -171,28 +174,31 @@ export function App() {
     else if (!showZones) toggleZones(true);
   };
 
-  /** Starts drawing a circle, for a group or on its own. */
-  const startDrawing = (group: string | null = null) => {
+  /** Starts drawing a circle or a rectangle, for a group or on its own. */
+  const startDrawing = (shape: Shape['kind'], group: string | null = null) => {
     setScreen('map');
     setPlacing(null);
-    setDrawRadius(null);
+    setDrawn(null);
+    setDrawShape(shape);
     setDrawGroup(group);
     setDrawing(true);
   };
-  const drawn = async (center: [number, number], radius: number) => {
-    if (radius < MIN_AREA) {
-      setDrawRadius(null);
-      setNotice(`Make the circle at least ${MIN_AREA} m across from its centre. Click the centre again.`);
+  const drawn = async (shape: Shape) => {
+    if (shapeProblem(shape)) {
+      setDrawn(null);
+      setNotice(shape.kind === 'circle'
+        ? `Make the circle at least ${MIN_AREA} m from its centre to its edge. Click the centre again.`
+        : `Make each side of the rectangle at least ${MIN_SIDE} m. Click the first corner again.`);
       return;
     }
     setNotice(null);
     setDrawing(false);
     const group = groups.find((g) => g.id === drawGroup) ?? null;
-    const r = await trail.addArea({ center, radius, group: group?.id ?? null });
+    const r = await trail.addArea({ shape, group: group?.id ?? null });
     if (!r.ok) setNotice(r.error);
     else {
       setSelected(null);
-      // A circle added to a joined group is part of the group's one list.
+      // An area added to a joined group is part of the group's one list.
       setListed(group?.joined ? group.id : r.value);
     }
   };
@@ -219,7 +225,7 @@ export function App() {
   const editGroup = (id: string, edit: GroupEdit | 'remove' | 'remove-all') => {
     const g = groups.find((x) => x.id === id);
     if (typeof edit !== 'string' && edit.joined !== undefined && g) {
-      // The list switches between the group and its circles.
+      // The list switches between the group and its areas.
       if (edit.joined && g.members.includes(listed ?? '')) setListed(id);
       if (!edit.joined && listed === id) setListed(null);
       setSelected(null);
@@ -227,7 +233,7 @@ export function App() {
     if (typeof edit === 'string' && (listed === id || (edit === 'remove-all' && g?.members.includes(listed ?? '')))) setListed(null);
     pend({ kind: 'group', id, edit }, typeof edit === 'string' ? trail.removeGroup(id, edit === 'remove-all') : trail.editGroup(id, edit));
   };
-  /** Turns a group's circles on or off, or shows and hides a kind in all of them. */
+  /** Turns a group's areas on or off, or shows and hides a kind in all of them. */
   const editMembers = (g: GroupView, edit: { on?: boolean; hide?: RoadKind[] }) => {
     for (const m of g.members) editArea(m, edit);
   };
@@ -262,13 +268,13 @@ export function App() {
     for (const a of areas) {
       const g = a.group ? joined.get(a.group) : undefined;
       if (!g) {
-        if (a.on) out.push({ id: a.id, circles: [a], ready: a.state === 'ready', roads: (roads[a.id]?.roads ?? []).filter((r) => !a.hide.includes(r.kind)) });
+        if (a.on) out.push({ id: a.id, shapes: [a.shape], ready: a.state === 'ready', roads: (roads[a.id]?.roads ?? []).filter((r) => !a.hide.includes(r.kind)) });
         continue;
       }
-      // A joined group is drawn once, where its first circle is.
+      // A joined group is drawn once, where its first area is.
       if (g.members[0] !== a.id) continue;
       const on = areas.filter((m) => m.group === g.id && m.on);
-      if (on.length) out.push({ id: g.id, circles: on, ready: g.state === 'ready', roads: (roads[g.id]?.roads ?? []).filter((r) => !g.hide.includes(r.kind)) });
+      if (on.length) out.push({ id: g.id, shapes: on.map((m) => m.shape), ready: g.state === 'ready', roads: (roads[g.id]?.roads ?? []).filter((r) => !g.hide.includes(r.kind)) });
     }
     return out;
   }, [areas, groups, roads]);
@@ -318,7 +324,7 @@ export function App() {
         goToRides={goToRides} addMap={() => void addMap()} notice={setNotice}
         showZones={showZones} setShowZones={toggleZones} placing={placing}
         setPlacing={(p) => { setScreen('map'); setDrawing(false); setPlacing(p); }}
-        drawing={drawing} drawGroup={drawGroup} startDrawing={startDrawing} areas={areas} groups={groups} editArea={editArea} editGroup={editGroup} editMembers={editMembers}
+        drawing={drawing} drawShape={drawShape} drawGroup={drawGroup} startDrawing={startDrawing} areas={areas} groups={groups} editArea={editArea} editGroup={editGroup} editMembers={editMembers}
         openPlanner={() => { setDrawing(false); setPlacing(null); setPlanning(true); }}
         listArea={(id) => { setScreen('map'); setSelected(null); setListed(id); }}
       />
@@ -343,7 +349,9 @@ export function App() {
         )}
         {drawing && screen === 'map' && (
           <div className="notice" role="status">
-            {drawRadius === null ? 'Click the centre of the area to search.' : `Radius ${distance(drawRadius)}. Click again to finish.`}
+            {drawShape === 'circle'
+              ? (sketch ? `${sizeLabel(sketch)}. Click again to finish.` : 'Click the centre of the area to search.')
+              : (sketch ? `${sizeLabel(sketch)}. Click the opposite corner to finish.` : 'Click one corner of the area to search.')}
             {drawGroup && ` It goes in ${groups.find((g) => g.id === drawGroup)?.name ?? 'the group'}.`}
             {' '}<button onClick={() => setDrawing(false)}>Cancel</button>
           </div>
@@ -355,7 +363,7 @@ export function App() {
             <MapView
               style={style} view={view} startView={m.view} focus={saved.focus} minZoom={m.minZoom} maxZoom={m.maxZoom}
               placing={placing !== null} onPlace={(at) => void place(at)}
-              drawing={drawing} onDrawn={(c, r) => void drawn(c, r)} onDrawRadius={setDrawRadius} onPickRoad={pick}
+              drawing={drawing} drawShape={drawShape} onDrawn={(s) => void drawn(s)} onDrawShape={setDrawn} onPickRoad={pick}
               goTo={goTo} onWent={() => setGoTo(null)} onView={onView} onTileError={setOffline}
             />
             {listedArea && (

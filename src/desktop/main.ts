@@ -4,7 +4,8 @@ import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
 import type { AreasState, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
 import { MAGIC, type MagicRequest, type PlanRequest } from '../core/planner.ts';
-import { circleBounds, KINDS, type OsmWay } from '../core/roads.ts';
+import { KINDS, type OsmWay } from '../core/roads.ts';
+import { shapeBounds, type Shape } from '../core/shapes.ts';
 import { gpxLine, routeGpx, statsOfLine, type Difficulty, type PlannedRoute } from '../core/route.ts';
 import { isRouteId, newRouteId, parseRoutes, routeFile, ROUTES_FILE, routesText, type SavedRoute } from '../core/routes.ts';
 import { TERRAIN_URL, TERRAIN_ZOOM, terrainTiles } from '../core/terrain.ts';
@@ -613,17 +614,19 @@ function start() {
     areaWrites = next.catch(() => {});
     return next;
   };
-  handle('addArea', (a: { center?: unknown; radius?: unknown; name?: unknown; group?: unknown }) => result(async () => {
-    const edit = { center: a?.center, radius: a?.radius, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null, group: a?.group ?? null } as AreaEdit;
-    if (edit.center === undefined || edit.radius === undefined) throw new Error('An area needs a place and a size.');
+  /** A circle's radius is kept in whole metres. */
+  const tidy = (s: Shape): Shape => (s.kind === 'circle' ? { ...s, radius: Math.round(s.radius) } : s);
+  handle('addArea', (a: { shape?: unknown; name?: unknown; group?: unknown }) => result(async () => {
+    const edit = { shape: a?.shape, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null, group: a?.group ?? null } as AreaEdit;
+    if (edit.shape === undefined) throw new Error('An area needs a place and a size.');
     checkAreaEdit(edit);
     let id = '';
     await editAreas((list, groups) => {
       if (edit.group && !groups.some((g) => g.id === edit.group)) throw new Error('That group is no longer in areas.json.');
       id = newAreaId([...list, ...groups]);
-      // A circle added to a group takes on what the group shows and hides.
+      // An area added to a group takes on what the group shows and hides.
       const like = list.find((x) => x.group && x.group === edit.group);
-      return [...list, { id, name: edit.name ?? null, center: edit.center!, radius: Math.round(edit.radius!), on: like?.on ?? true, hide: like ? [...like.hide] : [], group: edit.group ?? null }];
+      return [...list, { id, name: edit.name ?? null, shape: tidy(edit.shape!), on: like?.on ?? true, hide: like ? [...like.hide] : [], group: edit.group ?? null }];
     });
     return id;
   }));
@@ -634,8 +637,7 @@ function start() {
     if (edit.name !== undefined) clean.name = edit.name?.trim() || null;
     if (edit.on !== undefined) clean.on = edit.on;
     if (edit.hide !== undefined) clean.hide = [...new Set(edit.hide)];
-    if (edit.center !== undefined) clean.center = edit.center;
-    if (edit.radius !== undefined) clean.radius = Math.round(edit.radius);
+    if (edit.shape !== undefined) clean.shape = tidy(edit.shape);
     if (edit.group !== undefined) clean.group = edit.group;
     await editAreas((list, groups) => {
       if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
@@ -704,11 +706,11 @@ function start() {
     if (waiting) throw new Error(`${waiting.name ?? 'An area'} is still downloading. Wait for it, or leave it out.`);
     planProgress({ stage: 'roads', done: 0, total: 1 });
     const ways = new Map<number, OsmWay>();
-    for (const a of chosen) for (const w of osm.waysIn(a.center, a.radius)) ways.set(w.id, w);
-    const circles = chosen.map((a) => ({ center: a.center, radius: a.radius }));
-    const boxes = circles.map((c) => circleBounds(c.center, c.radius));
+    for (const a of chosen) for (const w of osm.waysIn(a.shape)) ways.set(w.id, w);
+    const shapes = chosen.map((a) => a.shape);
+    const boxes = shapes.map(shapeBounds);
     const bounds: Bounds = [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))];
-    // Only the tiles each circle touches, not the whole box around all of them.
+    // Only the tiles each area's box touches, not the whole box around all of them.
     const want = new Map<string, [number, number]>();
     for (const b of boxes) for (const t of terrainTiles(b)) want.set(t.join('/'), t);
     const missingElevation = await fetchTerrain(terrainDir, [...want.values()], async (x, y) => {
@@ -719,7 +721,7 @@ function start() {
     planProgress({ stage: 'network', done: 0, total: 1 });
     const key = `${n}:${ids.join(',')}`;
     const out = await runJob<NetworkResult>('planNetwork', {
-      key, ways: [...ways.values()], circles, tracks: store.tracks(config.heatmap.hide), bounds, terrainDir,
+      key, ways: [...ways.values()], shapes, tracks: store.tracks(config.heatmap.hide), bounds, terrainDir,
     } satisfies NetworkJob);
     return { key, ...out, bounds, missingElevation };
   }));

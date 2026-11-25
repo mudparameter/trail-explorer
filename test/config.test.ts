@@ -159,14 +159,21 @@ test('config.example/README.md is the README the app writes', async () => {
   assert.equal(readFileSync(join(import.meta.dirname, '..', 'config.example', 'README.md'), 'utf8'), CONFIG_README);
 });
 
-test('the circle outline is read from map.json, with problems reported', () => {
-  assert.deepEqual(parse({}).config.map.circles, { color: '#000000', width: 2, style: 'solid' });
-  const ok = parse({ 'map.json': { circles: { color: '#FF0000', width: 3.5, style: 'dotted' } } });
+test('the area outline is read from map.json, with problems reported', () => {
+  assert.deepEqual(parse({}).config.map.outline, { color: '#000000', width: 2, style: 'solid' });
+  const ok = parse({ 'map.json': { outline: { color: '#FF0000', width: 3.5, style: 'dotted' } } });
   assert.deepEqual(ok.problems, []);
-  assert.deepEqual(ok.config.map.circles, { color: '#ff0000', width: 3.5, style: 'dotted' });
-  const bad = parse({ 'map.json': { circles: { color: 'red', width: 50, style: 'wavy', glow: true } } });
-  assert.deepEqual(bad.config.map.circles, { color: '#000000', width: 2, style: 'solid' });
+  assert.deepEqual(ok.config.map.outline, { color: '#ff0000', width: 3.5, style: 'dotted' });
+  const bad = parse({ 'map.json': { outline: { color: 'red', width: 50, style: 'wavy', glow: true } } });
+  assert.deepEqual(bad.config.map.outline, { color: '#000000', width: 2, style: 'solid' });
   assert.equal(bad.problems.length, 4);
-  assert.match(bad.problems.map((p) => p.message).join(' '), /"circles": "style" should be "solid", "dashed", "dotted"/);
-  assert.equal(parse({ 'map.json': { circles: 'black' } }).problems.length, 1);
+  assert.match(bad.problems.map((p) => p.message).join(' '), /"outline": "style" should be "solid", "dashed", "dotted"/);
+  assert.equal(parse({ 'map.json': { outline: 'black' } }).problems.length, 1);
+  // Files from before rectangles call it "circles", and still work.
+  const old = parse({ 'map.json': { circles: { color: '#00ff00', width: 3, style: 'dashed' } } });
+  assert.deepEqual(old.problems, []);
+  assert.deepEqual(old.config.map.outline, { color: '#00ff00', width: 3, style: 'dashed' });
+  assert.match(parse({ 'map.json': { circles: { style: 'wavy' } } }).problems[0]!.message, /"circles": "style"/);
+  // When both are there, "outline" wins.
+  assert.equal(parse({ 'map.json': { outline: { width: 5 }, circles: { width: 1 } } }).config.map.outline.width, 5);
 });

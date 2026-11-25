@@ -22,7 +22,7 @@ Keep this folder private if it has zones in it: they show where you live.
 | `layers.json` | Every layer, top first: your rides, web maps and map files |
 | `maps/` | Offline map files (.pmtiles or .mbtiles) named in layers.json |
 | `zones/` | Excluded zones, as GeoJSON files |
-| `areas.json` | Circles to find roads and trails in |
+| `areas.json` | Circles and rectangles to find roads and trails in |
 | `routes.json`, `routes/` | Routes saved from the route planner, with a GPX file each |
 
 ## map.json
@@ -34,7 +34,7 @@ Keep this folder private if it has zones in it: they show where you live.
   "maxZoom": 19,
   "background": "#eeeeee",
   "overpass": ["https://overpass-api.de/api/interpreter"],
-  "circles": { "color": "#000000", "width": 2, "style": "solid" }
+  "outline": { "color": "#000000", "width": 2, "style": "solid" }
 }
 ```
 
@@ -44,12 +44,13 @@ Keep this folder private if it has zones in it: they show where you live.
 - `minZoom`, `maxZoom`: how far out and in the map can go.
 - `background`: shown where no layer has anything.
 - `overpass`: the Overpass API servers that road and trail searches ask for
-  OpenStreetMap data, tried in order when one is busy. The circle's position
-  is sent to them. Other public servers are listed at
+  OpenStreetMap data, tried in order when one is busy. The position of each
+  area you draw is sent to them. Other public servers are listed at
   https://wiki.openstreetmap.org/wiki/Overpass_API, or run your own.
-- `circles`: how the edge of the circles drawn under Roads and trails looks,
-  on the map and in the route planner. `color`, `width` in pixels (0.5 to 8),
-  and `style`: `"solid"`, `"dashed"` or `"dotted"`.
+- `outline`: how the edge of the circles and rectangles drawn under Roads and
+  trails looks, on the map and in the route planner. `color`, `width` in pixels
+  (0.5 to 8), and `style`: `"solid"`, `"dashed"` or `"dotted"`. Older files
+  call it `circles`, which still works.
 
 ## heatmap.json
 
@@ -100,7 +101,7 @@ digits, - and _), a `name`, and optionally a `note`, `on` and `opacity`
 
 - `heatmap`: your rides. There is always exactly one. Optional `width` (0.25 to
   3, normally 1) makes the ride lines thinner or thicker.
-- `roads`: the roads and trails found in the circles you draw (see areas.json),
+- `roads`: the roads and trails found in the areas you draw (see areas.json),
   dashed. There is always exactly one, normally just under your rides so
   ridden trails show in ride colours. It takes the same optional `width`.
 - `openfreemap`: the OpenFreeMap world map, with the bundled style.
@@ -124,9 +125,9 @@ files, made with any map tool such as geojson.io or QGIS.
 
 ## areas.json
 
-The circles drawn under Roads and trails, one per line, and the groups they
-are in. Draw them in the app, or add them by hand. The app downloads what each
-one needs.
+The circles and rectangles drawn under Roads and trails, one per line, and the
+groups they are in. Draw them in the app, or add them by hand. The app
+downloads what each one needs.
 
 ```json
 {
@@ -135,26 +136,30 @@ one needs.
   ],
   "areas": [
     { "id": "k3x9qa", "name": "Calderona", "center": [-0.47, 39.7], "radius": 1500, "on": true, "hide": ["road"], "group": "g-4kd02x" },
-    { "id": "p0z7mm", "center": [-0.45, 39.71], "radius": 1200, "on": true, "hide": ["road"], "group": "g-4kd02x" },
+    { "id": "p0z7mm", "box": [-0.46, 39.69, -0.43, 39.73], "on": true, "hide": ["road"], "group": "g-4kd02x" },
     { "center": [-0.52, 39.65], "radius": 800 }
   ]
 }
 ```
 
-- `center`: [longitude, latitude]. `radius`: metres, from 50 to 10000.
+- A circle has `center`: [longitude, latitude], and `radius`: metres, from 50
+  to 10000.
+- A rectangle has `box`: [west, south, east, north], in degrees, lined up with
+  north. Each side is from 100 to 20000 metres.
 - `name`: optional.
 - `on`: whether it shows on the map. `hide`: kinds of road left off the map
   for this area: `"trail"`, `"track"`, `"cycleway"`, `"road"`.
 - `id`: lets the app change one area. It is made for you when left out.
 - `group`: the id of the group it is in. Optional.
 
-`groups` is optional. A group puts several circles under one name, since one
-place often takes more than one circle to cover. Each has an `id` (up to 40
-lowercase letters, digits and dashes, not used by any area), a `name`, and
-`joined`: `true` shows its circles as one area, with one outline around them
-all and one list of roads and trails, counting overlaps once; `false` (the
-default) keeps each circle its own area, listed under the group. A group with
-no circles is dropped the next time the app saves the file.
+`groups` is optional. A group puts several shapes under one name, since one
+place often takes more than one to cover. Each has an `id` (up to 40 lowercase
+letters, digits and dashes, not used by any area), a `name`, and `joined`:
+`true` shows its shapes as one area, with one outline around them all and one
+list of roads and trails, counting overlaps once; `false` (the default) keeps
+each shape its own area, listed under the group. Circles and rectangles can
+share a group. A group with no shapes is dropped the next time the app saves
+the file.
 
 The road data is not in this folder. The app keeps one shared copy of it
 (`osm.db` in its data folder), so overlapping areas never download or store

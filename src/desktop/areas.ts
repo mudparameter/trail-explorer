@@ -4,7 +4,7 @@
 // for or download the same tile twice.
 import type { AreaView, GroupView } from '../core/api.ts';
 import type { Area, AreaGroup } from '../core/areas.ts';
-import { KINDS, kindTotals, overpassQuery, parseOverpass, roadsIn, roadsInCircles, tilesFor, type Road, type RoadKind } from '../core/roads.ts';
+import { KINDS, kindTotals, overpassQuery, parseOverpass, roadsIn, tilesFor, type Road, type RoadKind } from '../core/roads.ts';
 import type { OsmWay } from '../core/roads.ts';
 import type { OsmStore } from './osm.ts';
 
@@ -41,17 +41,17 @@ export class Areas {
     this.changed = changed;
   }
 
-  private sig = (a: Area) => `${a.center[0]},${a.center[1]},${a.radius}`;
+  private sig = (a: Area) => JSON.stringify(a.shape);
   private tilesOf(a: Area): number[] {
     const s = this.sig(a);
     let t = this.tiles.get(s);
-    if (!t) this.tiles.set(s, (t = tilesFor(a.center, a.radius)));
+    if (!t) this.tiles.set(s, (t = tilesFor(a.shape)));
     return t;
   }
   private missing = (a: Area) => this.tilesOf(a).filter((k) => !this.store.has(k));
 
   private members = (g: string) => this.areas.filter((a) => a.group === g);
-  /** A joined group's circles, which change its roads when they change. */
+  /** A joined group's shapes, which change its roads when they change. */
   private groupSig = (g: string) => this.members(g).map(this.sig).join(';');
 
   /** The areas and groups from the config. Starts downloading anything they need. */
@@ -99,8 +99,8 @@ export class Areas {
       const c = this.roads.get(id);
       if (c && c.sig === sig) return c;
       const ways = new Map<number, OsmWay>();
-      for (const m of ms) for (const w of this.store.waysIn(m.center, m.radius)) ways.set(w.id, w);
-      const fresh = { sig, roads: roadsInCircles([...ways.values()], ms.map((m) => ({ center: m.center, radius: m.radius }))), version: ++this.version };
+      for (const m of ms) for (const w of this.store.waysIn(m.shape)) ways.set(w.id, w);
+      const fresh = { sig, roads: roadsIn([...ways.values()], ms.map((m) => m.shape)), version: ++this.version };
       this.roads.set(id, fresh);
       return fresh;
     }
@@ -108,7 +108,7 @@ export class Areas {
     if (!a || this.missing(a).length) return null;
     const c = this.roads.get(id);
     if (c && c.sig === this.sig(a)) return c;
-    const fresh = { sig: this.sig(a), roads: roadsIn(this.store.waysIn(a.center, a.radius), a.center, a.radius), version: ++this.version };
+    const fresh = { sig: this.sig(a), roads: roadsIn(this.store.waysIn(a.shape), [a.shape]), version: ++this.version };
     this.roads.set(id, fresh);
     return fresh;
   }

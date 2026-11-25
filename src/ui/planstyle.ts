@@ -4,9 +4,9 @@ import type { FeatureCollection } from 'geojson';
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl';
 import type { MapInfo } from '../core/api.ts';
 import type { Config } from '../core/config.ts';
-import type { Circle } from '../core/network.ts';
+import type { Shape } from '../core/shapes.ts';
 import { KINDS } from '../core/roads.ts';
-import { buildStyle, circleFeatures, circleLineLayout, circleLinePaint, type Bundled } from './mapstyle.ts';
+import { areaFeatures, buildStyle, outlineLayout, outlinePaint, type Bundled } from './mapstyle.ts';
 
 /** One colour per route, in the order they are listed. */
 export const ROUTE_COLORS = ['#e11d48', '#7c3aed', '#0891b2', '#ca8a04', '#16a34a'];
@@ -32,7 +32,7 @@ export interface PlanStyleInput {
   baseMap: boolean;
   /** How paths you have ridden look. Normally highlighted. */
   ridden?: RiddenLook;
-  circles: Circle[];
+  shapes: Shape[];
   network: FeatureCollection | null;
   routes: PlanRoute[];
   selected: string | null;
@@ -69,14 +69,14 @@ export function planStyle(p: PlanStyleInput): StyleSpecification {
   /** Wider for the selected route. Zoom must be the outer expression. */
   const routeWidth = (on: number, off: number): any => ['interpolate', ['linear'], ['zoom'], ...[[10, 0.6], [14, 1], [18, 2]].flatMap(([z, k]) => [z, ['case', ['get', 'on'], on * k!, off * k!]])];
 
-  // Routes can go anywhere in the chosen circles, so they are drawn as one area.
-  const shapes = circleFeatures([{ id: 'plan', circles: p.circles }]);
-  const line = p.config.map.circles;
+  // Routes can go anywhere in the chosen areas, so they are drawn as one area.
+  const shapes = areaFeatures([{ id: 'plan', shapes: p.shapes }]);
+  const line = p.config.map.outline;
   sources.areas = { type: 'geojson', data: shapes.fill };
   sources['areas-edge'] = { type: 'geojson', data: shapes.edge };
   layers.push(
     { id: 'area-fill', type: 'fill', source: 'areas', paint: { 'fill-color': line.color, 'fill-opacity': 0.04 } },
-    { id: 'area-line', type: 'line', source: 'areas-edge', layout: circleLineLayout(line), paint: circleLinePaint(line) },
+    { id: 'area-line', type: 'line', source: 'areas-edge', layout: outlineLayout(line), paint: outlinePaint(line) },
   );
   if (p.network) {
     sources.net = { type: 'geojson', data: p.network, tolerance: 0.3 };

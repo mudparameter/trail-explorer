@@ -1,5 +1,5 @@
 {
-  "//": "Circles to find roads and trails in. Draw them on the map, or add { \"center\": [lon, lat], \"radius\": metres }. \"name\", \"on\" and \"hide\" are optional. See README.md.",
+  "//": "Circles and rectangles to find roads and trails in. Draw them on the map, or add { \"center\": [lon, lat], \"radius\": metres } or { \"box\": [west, south, east, north] }. \"name\", \"on\", \"hide\" and \"group\" are optional. See README.md.",
   "areas": [
     { "id": "example", "name": "Example area", "center": [-0.47, 39.7], "radius": 1500, "on": true, "hide": ["road"] }
   ]

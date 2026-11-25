@@ -2,17 +2,24 @@ import { useEffect, useRef, useState } from 'react';
 import type { AreaView, Bounds, GroupView } from '../core/api.ts';
 import type { AreaEdit, GroupEdit } from '../core/areas.ts';
 import { distance, KINDS, OSM_ATTRIBUTION, type Road, type RoadKind } from '../core/roads.ts';
-import { circleRing } from '../core/zones.ts';
+import { rectSize, shapesBounds, type Shape } from '../core/shapes.ts';
 import { trail } from './api.ts';
 
 const SHORT: Record<RoadKind, string> = { trail: 'trails', track: 'tracks', cycleway: 'cycleways', road: 'roads' };
 export const areaName = (a: AreaView | GroupView) => a.name ?? 'Unnamed area';
-const circles = (n: number) => `${n} circle${n === 1 ? '' : 's'}`;
+const shapes = (n: number) => `${n} shape${n === 1 ? '' : 's'}`;
+/** "850 m radius" or "1.2 km × 800 m". */
+export function sizeLabel(s: Shape): string {
+  if (s.kind === 'circle') return `${distance(s.radius)} radius`;
+  const [w, h] = rectSize(s.box);
+  return `${distance(w)} × ${distance(h)}`;
+}
+const NAMES: Record<Shape['kind'], string> = { circle: 'circle', rect: 'rectangle' };
 
-/** How the area's download is going, or what it holds. A separate group just says how its circles are doing. */
+/** How the area's download is going, or what it holds. A separate group just says how its shapes are doing. */
 function summary(a: AreaView | GroupView): string {
   if ('members' in a && !a.joined) {
-    if (a.state === 'ready') return `${circles(a.members.length)}, all downloaded`;
+    if (a.state === 'ready') return `${shapes(a.members.length)}, all downloaded`;
     if (a.state === 'error') return a.error ?? 'A download failed.';
   }
   if (a.state === 'ready') {
@@ -25,16 +32,13 @@ function summary(a: AreaView | GroupView): string {
   return a.error ?? 'The download failed.';
 }
 
-/** Around one or more circles. */
-export function areaBounds(...as: AreaView[]): Bounds {
-  const ring = as.flatMap((a) => circleRing(a.center, a.radius, 16));
-  return [Math.min(...ring.map((p) => p[0])), Math.min(...ring.map((p) => p[1])), Math.max(...ring.map((p) => p[0])), Math.max(...ring.map((p) => p[1]))];
-}
+/** Around one or more areas. */
+export const areaBounds = (...as: AreaView[]): Bounds => shapesBounds(as.map((a) => a.shape));
 
 type Report = (r: Promise<{ ok: boolean; error?: string }>) => Promise<boolean>;
 /** Changes or removes an area on screen at once, then saves it. */
 export type EditArea = (id: string, edit: AreaEdit | 'remove') => void;
-/** Changes a group, or removes it: 'remove' keeps its circles, 'remove-all' deletes them too. */
+/** Changes a group, or removes it: 'remove' keeps its areas, 'remove-all' deletes them too. */
 export type EditGroup = (id: string, edit: GroupEdit | 'remove' | 'remove-all') => void;
 export type EditMembers = (g: GroupView, edit: { on?: boolean; hide?: RoadKind[] }) => void;
 
@@ -45,16 +49,17 @@ interface ListProps {
   editGroup: EditGroup;
   editMembers: EditMembers;
   drawing: boolean;
-  /** The group a circle being drawn goes in. */
+  drawShape: Shape['kind'];
+  /** The group a shape being drawn goes in. */
   drawGroup: string | null;
-  startDrawing(group?: string | null): void;
+  startDrawing(shape: Shape['kind'], group?: string | null): void;
   go(b: Bounds): void;
   /** Opens the list of roads and trails for an area or a joined group. */
   list(id: string): void;
   report: Report;
 }
 
-/** The sidebar's list of areas, with groups where their first circle is. */
+/** The sidebar's list of areas, with groups where their first area is. */
 export function AreaList(p: ListProps) {
   const { areas, groups, drawing } = p;
   const [open, setOpen] = useState<string | null>(null);
@@ -69,9 +74,13 @@ export function AreaList(p: ListProps) {
   return (
     <>
       <h2>Roads and trails</h2>
-      <p className="small">Draw circles on the map to find every road and trail in them, from OpenStreetMap. They are kept, and overlapping circles share their data. Put circles that cover one place in a group with ▸.</p>
+      <p className="small">Draw circles or rectangles on the map to find every road and trail in them, from OpenStreetMap. They are kept, and overlapping areas share their data. Put shapes that cover one place in a group with ▸.</p>
       <ul className="layers areas">{items}</ul>
-      <button disabled={drawing} onClick={() => p.startDrawing(null)}>{drawing && !p.drawGroup ? 'Drawing…' : 'Draw a circle'}</button>
+      <div className="row">
+        {(['circle', 'rect'] as const).map((k) => (
+          <button key={k} disabled={drawing} onClick={() => p.startDrawing(k, null)}>{drawing && !p.drawGroup && p.drawShape === k ? 'Drawing…' : `Draw a ${NAMES[k]}`}</button>
+        ))}
+      </div>
     </>
   );
 }
@@ -84,7 +93,7 @@ function AreaItem({ area: a, edit, report, open, setOpen, confirm, setConfirm, .
       <div className="row top">
         <label>
           <input type="checkbox" checked={a.on} onChange={(e) => edit(a.id, { on: e.target.checked })} /> {areaName(a)}
-          <span className="small"> {distance(a.radius)}</span>
+          <span className="small"> {sizeLabel(a.shape)}</span>
         </label>
         <span className="order">
           <button aria-label={`Details of ${areaName(a)}`} aria-expanded={open === a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>{open === a.id ? '▾' : '▸'}</button>
@@ -119,7 +128,7 @@ function GroupItem({ group: g, areas, editGroup, editMembers, report, open, setO
       <div className="row top">
         <label>
           <input type="checkbox" checked={g.on} ref={(el) => { if (el) el.indeterminate = some; }} onChange={(e) => editMembers(g, { on: e.target.checked })} /> {g.name}
-          <span className="small"> {g.joined ? 'joined, ' : ''}{circles(members.length)}</span>
+          <span className="small"> {g.joined ? 'joined, ' : ''}{shapes(members.length)}</span>
         </label>
         <span className="order">
           <button aria-label={`Details of ${g.name}`} aria-expanded={open === g.id} onClick={() => setOpen(open === g.id ? null : g.id)}>{open === g.id ? '▾' : '▸'}</button>
@@ -131,8 +140,8 @@ function GroupItem({ group: g, areas, editGroup, editMembers, report, open, setO
       {confirm === g.id && (
         <div className="row small" role="alert">
           Delete this group?
-          <button onClick={() => { setConfirm(null); editGroup(g.id, 'remove'); }}>Keep its circles</button>
-          <button onClick={() => { setConfirm(null); if (open === g.id) setOpen(null); editGroup(g.id, 'remove-all'); }}>Delete its circles too</button>
+          <button onClick={() => { setConfirm(null); editGroup(g.id, 'remove'); }}>Keep its areas</button>
+          <button onClick={() => { setConfirm(null); if (open === g.id) setOpen(null); editGroup(g.id, 'remove-all'); }}>Delete its areas too</button>
           <button onClick={() => setConfirm(null)}>Cancel</button>
         </div>
       )}
@@ -146,19 +155,21 @@ function GroupItem({ group: g, areas, editGroup, editMembers, report, open, setO
           <label className="small check">
             <input type="checkbox" checked={g.joined} onChange={(e) => editGroup(g.id, { joined: e.target.checked })} /> Join into one area
           </label>
-          <p className="small">{g.joined ? 'Shown as one area, with one outline and one list of roads and trails. Overlaps count once.' : 'Each circle is still its own area, listed below.'}</p>
+          <p className="small">{g.joined ? 'Shown as one area, with one outline and one list of roads and trails. Overlaps count once.' : 'Each shape is still its own area, listed below.'}</p>
           {g.joined && <KindToggles area={g} setHide={(hide) => editMembers(g, { hide })} />}
           <div className="row small">
             <button className="link" onClick={() => p.go(areaBounds(...members))}>Go to</button>
             {g.joined && <button className="link" onClick={() => p.list(g.id)}>List roads and trails</button>}
-            <button className="link" disabled={p.drawing} onClick={() => p.startDrawing(g.id)}>{p.drawing && p.drawGroup === g.id ? 'Drawing…' : 'Draw a circle in this group'}</button>
+            {(['circle', 'rect'] as const).map((k) => (
+              <button key={k} className="link" disabled={p.drawing} onClick={() => p.startDrawing(k, g.id)}>{p.drawing && p.drawGroup === g.id && p.drawShape === k ? 'Drawing…' : `Draw a ${NAMES[k]} in this group`}</button>
+            ))}
             <button className="link" onClick={() => editGroup(g.id, 'remove')}>Ungroup</button>
           </div>
           {g.joined && (
             <ul className="members">
               {members.map((m) => (
                 <li key={m.id} className="row small">
-                  <span>{areaName(m)} · {distance(m.radius)}</span>
+                  <span>{areaName(m)} · {sizeLabel(m.shape)}</span>
                   <button className="link" onClick={() => p.edit(m.id, { group: null })}>Take out</button>
                 </li>
               ))}
@@ -271,7 +282,7 @@ export function RoadsPanel({ area, roads, selected, select, go, report, setHide,
     <section className="roads" aria-label="Roads and trails">
       <header>
         <strong>{areaName(area)}</strong>
-        <span className="small">{'members' in area ? `${circles(area.members.length)}, joined` : `${distance(area.radius)} around`}</span>
+        <span className="small">{'members' in area ? `${shapes(area.members.length)}, joined` : sizeLabel(area.shape)}</span>
         <button className="close" aria-label="Close the list" title="Close" onClick={close}>×</button>
       </header>
       {area.state !== 'ready' && (
@@ -281,7 +292,7 @@ export function RoadsPanel({ area, roads, selected, select, go, report, setHide,
       )}
       {area.state === 'ready' && roads && (
         <>
-          <p className="small">{roads.length ? 'Click a name to show it, or a line on the map.' : 'Nothing found in this circle.'}</p>
+          <p className="small">{roads.length ? 'Click a name to show it, or a line on the map.' : 'Nothing found in this area.'}</p>
           <div className="roads-list" ref={list}>
             {KINDS.map(({ kind, label, color }) => {
               const rs = roads.filter((r) => r.kind === kind);

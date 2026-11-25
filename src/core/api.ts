@@ -8,6 +8,7 @@ import type { Activity } from './activities.ts';
 import type { Config, FILES, Problem } from './config.ts';
 import type { Area, AreaEdit, AreaGroup, GroupEdit } from './areas.ts';
 import type { Road, RoadKind } from './roads.ts';
+import type { Shape } from './shapes.ts';
 import type { CircleEdit } from './zones.ts';
 
 export interface SyncStatus {
@@ -102,7 +103,7 @@ export interface AreaView extends Area {
   total: number;
   /** Changes when its roads change, so the window knows to fetch them again. 0 until ready. */
   version: number;
-  /** Metres of each kind inside the circle. */
+  /** Metres of each kind inside the area. */
   totals: Partial<Record<RoadKind, number>>;
 }
 /** A group of areas. Joined, it is one area, with its own state and roads; separate, just a heading. */
@@ -119,7 +120,7 @@ export interface GroupView extends AreaGroup {
   total: number;
   /** Joined groups only, like an area's: changes when its roads change. */
   version: number;
-  /** Joined groups only: metres of each kind inside any of its circles, overlaps counted once. */
+  /** Joined groups only: metres of each kind inside any of its shapes, overlaps counted once. */
   totals: Partial<Record<RoadKind, number>>;
 }
 export interface AreasState {
@@ -199,7 +200,7 @@ export interface TrailApi {
   /** The roads and trails in an area, or in a joined group. Empty until it is ready. */
   getAreaRoads(id: string): Promise<Result<{ version: number; roads: Road[] }>>;
   /** Saves a new area and starts downloading its data. Returns its id. */
-  addArea(area: { center: [number, number]; radius: number; name?: string | null; group?: string | null }): Promise<Result<string>>;
+  addArea(area: { shape: Shape; name?: string | null; group?: string | null }): Promise<Result<string>>;
   editArea(id: string, edit: AreaEdit): Promise<Result>;
   /** Removes an area. Data another area also uses is kept. */
   removeArea(id: string): Promise<Result>;

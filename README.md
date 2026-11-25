@@ -15,8 +15,8 @@ Trail Explorer is a desktop app for macOS and Linux. It downloads your rides fro
 - **Map layers.** The world map (OpenFreeMap), a world topo map (OpenTopoMap) and a Spain topo map (IGN). You can switch each one on or off, reorder them and set how see-through they are. Ride lines and road and trail lines also have a line width slider.
 - **Offline maps.** Add a `.pmtiles` or `.mbtiles` map, or the `.zip` that [BBBike](https://extract.bbbike.org) sends, for a detailed map that works without internet.
 - **Excluded zones.** Hide places such as around home: click the map to place a circle, or draw any shape in a GeoJSON file. Rides are cut where they enter a zone.
-- **Roads and trails in an area.** Draw circles on the map to get every road, track, cycleway and trail inside them, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). Circles are kept and listed in the sidebar, where each can be named, turned off, filtered by kind or deleted. Circles that cover one place can go in a group, kept separate or joined into one area with one outline and one list of roads and trails. The circles' outline colour, thickness and style (solid, dashed or dotted) are set in Customize. Data downloads in the background and is shared: circles that overlap never download or store it twice. Needs the internet, and sends each circle's position to that server.
-- **Route planner.** A separate mode for planning rides in your circles. Pick the circles, click a start (and a finish, or loop back), set a distance and optionally climbing and the steepest climb and descent, and get three to five routes that mix trails you have ridden with ones you haven't. Each has a difficulty rating with reasons, distance, climbing and descent in metric and imperial, the share of new trail, warnings for very steep parts, and an elevation profile. Save the ones you like; the Routes screen lists them in a sortable table, where they can be renamed, viewed or downloaded as `.gpx`. See [Route planning](#route-planning).
+- **Roads and trails in an area.** Draw circles or rectangles on the map to get every road, track, cycleway and trail inside them, with length, surface and difficulty, from OpenStreetMap through the free [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API). A circle takes two clicks (centre, then edge), and so does a rectangle (two opposite corners). Areas are kept and listed in the sidebar, where each can be named, turned off, filtered by kind or deleted. Shapes that cover one place can go in a group, kept separate or joined into one area with one outline and one list of roads and trails; circles and rectangles can be mixed. The outline colour, thickness and style (solid, dashed or dotted) are set in Customize. Data downloads in the background and is shared: areas that overlap never download or store it twice. Needs the internet, and sends each area's position to that server.
+- **Route planner.** A separate mode for planning rides in your areas. Pick the areas, click a start (and a finish, or loop back), set a distance and optionally climbing and the steepest climb and descent, and get three to five routes that mix trails you have ridden with ones you haven't. Each has a difficulty rating with reasons, distance, climbing and descent in metric and imperial, the share of new trail, warnings for very steep parts, and an elevation profile. Save the ones you like; the Routes screen lists them in a sortable table, where they can be renamed, viewed or downloaded as `.gpx`. See [Route planning](#route-planning).
 - **Portable config.** Colors, start view, zoom limits, layers, offline maps and zones live in one folder of plain JSON files. Edit them in the app's Customize screen or by hand, and copy the folder to another computer.
 - **Private.** Rides stay on your computer. The Garmin key is encrypted with your system keychain and sent only to Garmin.
 
@@ -57,7 +57,7 @@ The first sync downloads every ride Garmin returns, which seems to be about the 
 
 Open **Route planner →** under Roads and trails in the sidebar. It is a separate mode, with a blue bar across the top; **← Back to the map** returns.
 
-1. **Areas:** tick the circles to plan in. The app reads their paths, works out which you have ridden (any activity shown on the heatmap, within about 20 m and going the same way), and downloads elevation for them.
+1. **Areas:** tick the circles and rectangles to plan in. The app reads their paths, works out which you have ridden (any activity shown on the heatmap, within about 20 m and going the same way), and downloads elevation for them.
 2. **Start and finish:** a loop back to the start, or a start and a separate finish. Click the map to place them.
 3. **Your ride:** distance in km or miles, give or take a tolerance (± 5 km unless changed; routes within it come first, closest first), climbing in metres or feet (optional), the steepest climb and steepest descent allowed in % (each optional: routes never climb or go down anything steeper than its limit, measured over 50 m, but may ride it the other way), how much new trail (a little, some, lots), which kinds of path, and whether to allow paths marked private or no bikes (off by default).
 4. **Pick a route:** three to five routes, best first. Click one to see it, open its elevation profile, and save it. **Generate new routes** asks for a different set from the same request, leaving out the ones already shown.
@@ -68,7 +68,7 @@ Under the map key, **Paths you've ridden** highlights them in blue, darkens them
 
 **Include my favourite trails** in step 3 takes in the paths you have ridden most in the chosen areas: ridden at least twice, and in your most-ridden fifth there or at least half as often as your most-ridden path. Routes join a favourite stretch where it is nearest the start and ride along it (up to a third of the distance), favourites cost the planner less, and routes with about a quarter of their length on them come first. Each card says how much of it is on favourites. Magic routes leave this out, as they use only distance and difficulty.
 
-Routing is deterministic and runs on your computer, on the OpenStreetMap data already downloaded for your circles. The same areas, rides and request always give the same routes; nothing is guessed by AI. Each route aims for a share of new trail rather than all of it, so an area fills in over several rides.
+Routing is deterministic and runs on your computer, on the OpenStreetMap data already downloaded for your areas. The same areas, rides and request always give the same routes; nothing is guessed by AI. Each route aims for a share of new trail rather than all of it, so an area fills in over several rides.
 
 Difficulty (Easy, Moderate, Hard, Very hard) comes from the kinds of path, `mtb:scale` or `sac_scale` where OpenStreetMap has them, climbing per km, total climbing, length, and the steepest climb and descent over 50 m. Parts at 15% or steeper are listed and shaded on the profile.
 
@@ -76,7 +76,7 @@ Elevation comes from the free [Terrain Tiles on AWS](https://registry.opendata.a
 
 Limitations:
 
-- **Only the circles you choose.** Routes never leave them, and circles that don't touch can't be joined. If an area is too small for the distance asked, the planner says so.
+- **Only the areas you choose.** Routes never leave them, and areas that don't touch can't be joined. If an area is too small for the distance asked, the planner says so.
 - **OpenStreetMap is the map.** Missing, misplaced or wrongly tagged paths end up in routes. Difficulty tags are often missing, so ratings lean on path type and gradient.
 - **Elevation is approximate.** 10–30 m data smooths short, very steep pitches. Climbing can be off by 10–20%, and steep warnings are estimates.
 - **Distance is a target.** Routes are usually within about 10–15% of it.
@@ -94,7 +94,7 @@ config/
   layers.json      every layer, top first: your rides, web maps, offline map files
   maps/            offline .pmtiles / .mbtiles files
   zones/           excluded zones, as .geojson files
-  areas.json       circles to find roads and trails in
+  areas.json       circles and rectangles to find roads and trails in
 ```
 
 - **Where it is:** `~/.config/Trail Explorer/config` on Linux and `~/Library/Application Support/Trail Explorer/config` on macOS. Use **Customize → Use another folder…** to choose a different one, or set `TRAIL_CONFIG=/path/to/folder` before starting the app. For example, you can point it at a private git repository you sync between computers.
@@ -105,13 +105,13 @@ config/
 
 ### Road and trail data
 
-Downloaded roads and trails are kept in `osm.db` in the app's data folder, not in the config folder: it can grow large, and it can always be downloaded again. It holds one copy of each OpenStreetMap way and node, whichever circles use it:
+Downloaded roads and trails are kept in `osm.db` in the app's data folder, not in the config folder: it can grow large, and it can always be downloaded again. It holds one copy of each OpenStreetMap way and node, whichever areas use it:
 
 - `node`: id, longitude, latitude, and an elevation column that is empty for now
 - `way`: id, OpenStreetMap tags, and its node ids in order, so ways that meet share a node (ready to become a route graph)
 - `tile`: which map tiles (zoom 15, about 1 km) have been downloaded
 
-A circle downloads only the tiles it needs that aren't there yet, a few at a time, so a big circle survives a restart. Deleting a circle removes only the data no other circle uses.
+An area downloads only the tiles it needs that aren't there yet, a few at a time, so a big area survives a restart. Deleting an area removes only the data no other area uses.
 
 [`config.example/`](config.example) has a complete example with every file. Its [README](config.example/README.md) documents every setting.
 
