@@ -2,6 +2,7 @@
 // wished-for distance, mixing trails you have ridden with ones you haven't.
 // Everything here is deterministic: the same network and request always give
 // the same routes. No Electron or DOM code here.
+import { findDescents, type Descent, type DescentWish, type Use } from './descent.ts';
 import type { Edge, Network } from './network.ts';
 import type { RoadKind } from './roads.ts';
 import { metres, M_PER_DEG } from './track.ts';
@@ -39,6 +40,11 @@ export interface PlanRequest {
    * for a few distances in that range and the ones within it are kept, closest first.
    */
   tolerance?: number | null;
+  /**
+   * A long descent the route must include. Planning fails, saying why, when the
+   * chosen areas have none that long. Needs heights on the network (addHeights).
+   */
+  descent?: DescentWish | null;
 }
 
 /** Favourite trails cost this much less per metre, so routes go out of their way for them. */
@@ -65,6 +71,10 @@ export function favoriteEdges(net: Network): Set<number> {
   return new Set(ridden.filter((x) => x.n >= min).map((x) => x.i));
 }
 
+/** Descents found per network, by the rules that find them: planning several distances or variants finds them once. */
+const DESCENT_CACHE = new WeakMap<Network, Map<string, { found: Descent[]; longest: number }>>();
+const km = (m: number) => `${(m / 1000).toFixed(1)} km`;
+
 /** A number from 0 to 1 from two integers, always the same for the same two. */
 function hash01(a: number, b: number): number {
   let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x632be5ab, 0xc2b2ae35);
@@ -86,6 +96,8 @@ export interface MagicRequest {
   variant?: number;
   /** Take in your favourite trails, as with planning by hand. */
   favorites?: boolean;
+  /** A long descent the routes must include, as with planning by hand. */
+  descent?: DescentWish | null;
 }
 
 /**
@@ -137,6 +149,8 @@ export interface Planned {
   restricted: boolean;
   /** Compass direction of the route's middle from the start, for its name. */
   heading: string;
+  /** The long descent asked for: where it is in `line` (first and last point), how long and how far down. */
+  descent?: { from: number; to: number; length: number; drop: number };
 }
 
 // --- graph search -------------------------------------------------------------------
@@ -309,10 +323,10 @@ export class Planner {
     return out.reverse();
   }
 
-  /** A route through points in order, or null if a leg can't be made. */
-  private through(points: number[]): Step[] | null {
+  /** A route through points in order, or null if a leg can't be made. Edges in `used` are avoided where they can be. */
+  private through(points: number[], avoid: Iterable<number> = []): Step[] | null {
     const steps: Step[] = [];
-    const used = new Set<number>();
+    const used = new Set<number>(avoid);
     for (let i = 1; i < points.length; i++) {
       const leg = this.path(points[i - 1]!, points[i]!, used);
       if (!leg) return null;
@@ -337,13 +351,15 @@ export class Planner {
     return metres(p[0], p[1], b.lon, b.lat) - metres(p[0], p[1], a.lon, a.lat) <= within ? f : any;
   }
 
-  private summary(steps: Step[]): Planned {
+  private summary(steps: Step[], span?: { from: number; to: number; descent: Descent }): Planned {
     const { edges, nodes } = this.net;
     const line: [number, number][] = [];
+    const at: [number, number] = [0, 0];
     const count = new Map<number, number>();
     const kinds: Partial<Record<RoadKind, number>> = {};
     let distance = 0, fresh = 0, repeated = 0, favorite = 0, level: number | null = null, restricted = false;
-    for (const { edge, back } of steps) {
+    for (const [i, { edge, back }] of steps.entries()) {
+      if (span && i === span.from) at[0] = Math.max(0, line.length - 1);
       const e = edges[edge]!;
       const pts: [number, number][] = [];
       for (let k = 0; k < e.coords.length; k += 2) pts.push([e.coords[k]!, e.coords[k + 1]!]);
@@ -360,14 +376,19 @@ export class Planner {
       kinds[e.kind] = (kinds[e.kind] ?? 0) + e.len;
       if (e.level !== null) level = Math.max(level ?? 0, e.level);
       if (e.restricted) restricted = true;
+      if (span && i === span.to - 1) at[1] = line.length - 1;
     }
     const s = nodes[this.startNode]!;
     const mid = line[Math.floor(line.length / 2)] ?? [s.lon, s.lat];
-    return { steps, line, distance, fresh, repeated, favorite, kinds, level, restricted, heading: compass(s.lon, s.lat, mid[0], mid[1]) };
+    return {
+      steps, line, distance, fresh, repeated, favorite, kinds, level, restricted, heading: compass(s.lon, s.lat, mid[0], mid[1]),
+      ...(span ? { descent: { from: at[0], to: at[1], length: span.descent.length, drop: span.descent.drop } } : {}),
+    };
   }
 
   /** Up to `count` different routes for the request, best first. */
   plan(count = 5, climbOf?: (p: Planned) => number): Planned[] {
+    if (this.req.descent) return this.planDescent(this.req.descent, count, climbOf);
     const { start, finish, distance } = this.req;
     const s = this.startNode;
     const f = finish ? this.nearest(finish, this.reach) : s;
@@ -433,6 +454,100 @@ export class Planner {
       }
       if (best) candidates.push(best);
     }
+    return this.pick(candidates, count, climbOf);
+  }
+
+  /** How a way along an edge can be used in a descent: the route's own rules, but roads may always join trails. */
+  private descentUse(d: number): Use {
+    const e = this.net.edges[d >> 1]!;
+    const req = this.req;
+    if ((d & 1 ? e.oneway === 1 : e.oneway === -1) || (!req.allowRestricted && e.restricted)) return 'no';
+    if (req.maxLevel != null && e.level !== null && e.level > req.maxLevel) return 'no';
+    const way = d & 1;
+    if (e.down && ((req.maxDown != null && e.down[way]! > req.maxDown) || (req.maxUp != null && e.down[1 - way]! > req.maxUp))) return 'no';
+    if (req.kinds.includes(e.kind)) return 'ok';
+    return e.kind === 'road' ? 'connector' : 'no';
+  }
+
+  /** Descents for this request, worked out once per network and rules. */
+  private descents(wish: DescentWish): { found: Descent[]; longest: number } {
+    const r = this.req;
+    const key = JSON.stringify([wish, [...r.kinds].sort(), r.allowRestricted, r.maxDown ?? null, r.maxUp ?? null, r.maxLevel ?? null]);
+    let byNet = DESCENT_CACHE.get(this.net);
+    if (!byNet) DESCENT_CACHE.set(this.net, (byNet = new Map()));
+    let out = byNet.get(key);
+    if (!out) {
+      out = findDescents(this.net, (d) => this.descentUse(d), wish);
+      byNet.set(key, out);
+      if (byNet.size > 20) byNet.delete(byNet.keys().next().value!);
+    }
+    return out;
+  }
+
+  /**
+   * Routes that include a long descent: to its top, down it, and on to the
+   * finish (or back to the start), with a detour before or after it to come
+   * near the distance. Throws, saying why, when there is no descent that long
+   * or none can be reached.
+   */
+  private planDescent(wish: DescentWish, count: number, climbOf?: (p: Planned) => number): Planned[] {
+    const { start, finish, distance } = this.req;
+    const { found, longest } = this.descents(wish);
+    const rules = `at least ${wish.minGrade}% down on average, never climbing more than ${wish.maxClimb} m on the way`;
+    if (!found.length) {
+      throw new Error(longest
+        ? `No descent here is ${km(wish.length)} long. The longest is ${km(longest)} (${rules}). Ask for a shorter descent, a lower average steepness or a bigger climb allowance, or add bigger areas.`
+        : `No descent was found here (${rules}). Elevation may be missing, or the areas may be too flat or too small.`);
+    }
+    const s = this.startNode;
+    const f = finish ? this.nearest(finish, this.reach) : s;
+    if (f < 0) throw new Error('The finish cannot be reached from the start on the paths chosen.');
+    const reachable = found.filter((d) => this.reach.has(d.top));
+    if (!reachable.length) {
+      throw new Error(`There ${found.length === 1 ? 'is a descent' : 'are descents'} of ${km(wish.length)} or more here, but none can be reached from the start on the paths chosen. Try another start, or more kinds of path.`);
+    }
+    // Nearest the start and finish first. Another variant starts further down the list.
+    const near = (n: number, m: number) => metres(this.net.nodes[n]!.lon, this.net.nodes[n]!.lat, this.net.nodes[m]!.lon, this.net.nodes[m]!.lat);
+    const ranked = [...reachable].sort((a, b) => near(s, a.top) + near(a.bottom, f) - (near(s, b.top) + near(b.bottom, f)) || a.length - b.length);
+    const variant = this.req.variant ?? 0;
+    const pickN = Math.min(4, ranked.length);
+    const chosen = Array.from({ length: pickN }, (_, i) => ranked[(i + variant * pickN) % ranked.length]!);
+    const turn = variant ? (hash01(variant, 7) - 0.5) * (Math.PI / 4) + variant * 0.3 : 0;
+    const candidates: Planned[] = [];
+    for (const d of chosen) {
+      const edgesOf = d.steps.map((x) => x.edge);
+      const make = (pre: number[], post: number[]): Planned | null => {
+        const up = this.through([s, ...pre, d.top], edgesOf);
+        if (!up) return null;
+        const on = this.through([d.bottom, ...post, f], [...edgesOf, ...up.map((x) => x.edge)]);
+        if (!on) return null;
+        const steps = [...up, ...d.steps, ...on];
+        return this.summary(steps, { from: up.length, to: up.length + d.steps.length, descent: d });
+      };
+      const base = make([], []);
+      if (!base) continue;
+      candidates.push(base);
+      if (base.distance >= distance * 0.92) continue;
+      // Too short: a detour on the way to the top, or after the bottom, sized to the distance still wanted.
+      const top = this.net.nodes[d.top]!, bottom = this.net.nodes[d.bottom]!;
+      for (let i = 0; i < 4; i++) {
+        const b = (i * Math.PI) / 2 + turn;
+        for (const before of [true, false]) {
+          const from: [number, number] = before ? [(start[0] + top.lon) / 2, (start[1] + top.lat) / 2] : [(bottom.lon + (finish ?? start)[0]) / 2, (bottom.lat + (finish ?? start)[1]) / 2];
+          let r = (distance - base.distance) / 2.6;
+          let best: Planned | null = null;
+          for (let tries = 0; tries < 4; tries++) {
+            const w = this.waypoint(offset(from, b, r), Math.max(150, r / 8));
+            const p = before ? make([w], []) : make([], [w]);
+            if (p && (!best || Math.abs(p.distance - distance) < Math.abs(best.distance - distance))) best = p;
+            if (!p || Math.abs(p.distance - distance) / distance < 0.08 || p.distance <= base.distance) break;
+            r *= Math.max(0.5, Math.min(2, (distance - base.distance) / (p.distance - base.distance)));
+          }
+          if (best) candidates.push(best);
+        }
+      }
+    }
+    if (!candidates.length) throw new Error(`The descents of ${km(wish.length)} or more here can't be joined into a route from the start${finish ? ' to the finish' : ''} on the paths chosen. Try another start, or more kinds of path.`);
     return this.pick(candidates, count, climbOf);
   }
 

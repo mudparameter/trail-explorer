@@ -174,6 +174,7 @@ table.routes .name input { min-width: 160px; }
 .form.ride .row.distance input[type='number'] { width: 54px; }
 .form.ride label.fav { display: block; }
 .form.ride label.fav .small { display: block; margin: 2px 0 0 22px; }
+.form.ride .descent { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 0 22px; padding-left: 10px; border-left: 2px solid #d1d5db; }
 .ride .magic-note { border: 1px solid #c4b5fd; background: #faf5ff; border-radius: 6px; padding: 6px 10px; margin: 0; }
 .ride .magic-go { background: #7c3aed; color: #fff; border-color: #6d28d9; }
 .plan-key label { display: block; margin-top: 4px; }

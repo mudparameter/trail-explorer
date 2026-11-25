@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AreaView, Bounds, GroupView, MapInfo, PlanNetwork, PlanProgress } from '../core/api.ts';
 import { bandLabels, type Config } from '../core/config.ts';
+import { DESCENT_DEFAULTS, type DescentWish } from '../core/descent.ts';
 import { insideAny } from '../core/shapes.ts';
 import type { Level, NewTrail, PlanRequest } from '../core/planner.ts';
 import { height, km, type PlannedRoute } from '../core/route.ts';
@@ -68,6 +69,11 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
   const [kinds, setKinds] = useState<RoadKind[]>(['trail', 'track', 'cycleway', 'road']);
   const [allowRestricted, setAllowRestricted] = useState(false);
   const [favorites, setFavorites] = useState(false);
+  /** A long descent the routes must include, and its rules. */
+  const [descentOn, setDescentOn] = useState(false);
+  const [descentLen, setDescentLen] = useState('10');
+  const [descentClimb, setDescentClimb] = useState(String(DESCENT_DEFAULTS.maxClimb));
+  const [descentGrade, setDescentGrade] = useState(String(DESCENT_DEFAULTS.minGrade));
   const [routes, setRoutes] = useState<PlannedRoute[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [profile, setProfile] = useState(false);
@@ -133,6 +139,17 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     if (!(d >= 500 && d <= 300_000)) return 'Choose a distance from 0.5 to 300 km (0.3 to 186 mi).';
     return { start, finish: loop ? null : finish, distance: Math.round(d) };
   };
+  /** The long descent asked for, checked: null when off, or what is wrong. */
+  const descent = (): DescentWish | null | string => {
+    if (!descentOn) return null;
+    const length = Number(descentLen) * (distUnit === 'mi' ? 1609.344 : 1000);
+    if (descentLen.trim() === '' || !(length >= 500 && length <= 100_000)) return 'Choose a descent length from 0.5 to 100 km (0.3 to 62 mi).';
+    const maxClimb = Number(descentClimb);
+    if (descentClimb.trim() === '' || !(maxClimb >= 0 && maxClimb <= 500)) return 'Choose the most the descent may climb, from 0 to 500 m.';
+    const minGrade = Number(descentGrade);
+    if (descentGrade.trim() === '' || !(minGrade >= DESCENT_DEFAULTS.minGrade && minGrade <= 50)) return `Choose the descent's average steepness, from ${DESCENT_DEFAULTS.minGrade} to 50%.`;
+    return { length: Math.round(length), maxClimb, minGrade };
+  };
   const request = (): PlanRequest | string => {
     const p = place();
     if (typeof p === 'string') return p;
@@ -146,7 +163,9 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     if (!kinds.length) return 'Choose at least one kind of path.';
     const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
     if (tolerance.trim() === '' || !(tol >= 0 && tol <= 100_000)) return 'Choose how far off the distance may be, from 0 to 100 km (62 mi).';
-    return { ...p, tolerance: Math.round(tol), climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted, maxDown: md, maxUp: mu, favorites };
+    const ds = descent();
+    if (typeof ds === 'string') return ds;
+    return { ...p, tolerance: Math.round(tol), climb: c === null ? null : Math.round(c), newTrail, kinds, allowRestricted, maxDown: md, maxUp: mu, favorites, descent: ds };
   };
   /** Plans routes, or magic ones. `again` asks for a new set, leaving out the ones shown so far. */
   const plan = async (magic: boolean, again = false) => {
@@ -157,11 +176,13 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     const tol = Number(tolerance) * (distUnit === 'mi' ? 1609.344 : 1000);
     if (magic && !difficulty) return setError('Choose a difficulty for magic routes.');
     if (magic && !(tol >= 0 && tol <= 100_000)) return setError('Choose how far off the distance may be, from 0 to 100 km (62 mi).');
+    const ds = descent();
+    if (typeof ds === 'string') return setError(ds);
     const more = again && asked ? { variant: asked.variant + 1, seen: [...asked.seen, ...routes.map((r) => r.id)] } : { variant: 0, seen: [] };
     setBusy(magic ? 'magic' : again ? 'again' : 'plan');
     setError(null);
     const r = magic
-      ? await trail.planMagic(net.key, { start: req.start, finish: req.finish, distance: req.distance, tolerance: Math.round(tol), difficulty: difficulty!, favorites }, more)
+      ? await trail.planMagic(net.key, { start: req.start, finish: req.finish, distance: req.distance, tolerance: Math.round(tol), difficulty: difficulty!, favorites, descent: ds }, more)
       : await trail.planRoutes(net.key, req as PlanRequest, { ...more, difficulty });
     setBusy(null);
     if (!r.ok) return setError(r.error);
@@ -266,7 +287,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
           </section>
 
           <section className="step">
-            {head(3, 'Your ride', magicMode ? `✨ ${dist} ± ${tolerance} ${distUnit}, ${(difficulty ?? 'any').toLowerCase()}${favorites ? ', with favourites' : ''}` : `${dist} ± ${tolerance} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}${difficulty ? `, ${difficulty.toLowerCase()}` : ''}${maxUp ? `, up ≤ ${maxUp}%` : ''}${maxDown ? `, down ≤ ${maxDown}%` : ''}${favorites ? ', with favourites' : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
+            {head(3, 'Your ride', magicMode ? `✨ ${dist} ± ${tolerance} ${distUnit}, ${(difficulty ?? 'any').toLowerCase()}${favorites ? ', with favourites' : ''}${descentOn ? `, ${descentLen} ${distUnit} descent` : ''}` : `${dist} ± ${tolerance} ${distUnit}${climb ? `, ${climb} ${climbUnit} up` : ''}${difficulty ? `, ${difficulty.toLowerCase()}` : ''}${maxUp ? `, up ≤ ${maxUp}%` : ''}${maxDown ? `, down ≤ ${maxDown}%` : ''}${favorites ? ', with favourites' : ''}${descentOn ? `, ${descentLen} ${distUnit} descent` : ''}, ${NEW_TRAIL.find((x) => x.id === newTrail)!.label.toLowerCase()} new`)}
             {step === 3 && (
               <form className="form ride" onSubmit={(e) => { e.preventDefault(); void plan(magicMode); }}>
                 <div className="choice mode" role="radiogroup" aria-label="Planning">
@@ -275,8 +296,9 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 </div>
                 {magicMode && (
                   <p className="small magic-note">
-                    Only the distance, difficulty and favourite trails count. Climbing, steepness and path difficulty are chosen
-                    to suit the difficulty you pick, and paths marked private or no bikes are left out.
+                    Only the distance, difficulty, favourite trails and a long descent count. Climbing, steepness and path difficulty
+                    are chosen to suit the difficulty you pick, so a long descent is no steeper than it allows, and paths marked
+                    private or no bikes are left out.
                   </p>
                 )}
                 <label>
@@ -345,6 +367,38 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                   <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} /> Include my favourite trails
                   <span className="small"> The ones you have ridden most in these areas. Routes go out of their way for them, and ones with more come first.</span>
                 </label>
+                <label className="fav">
+                  <input type="checkbox" checked={descentOn} onChange={(e) => setDescentOn(e.target.checked)} /> Include a long descent
+                  <span className="small"> One continuous stretch that keeps going down. If the chosen areas have none that long, you are told the longest there is.</span>
+                </label>
+                {descentOn && (
+                  <div className="descent">
+                    <label>
+                      Length
+                      <span className="row">
+                        <input type="number" min={0.5} step={0.5} value={descentLen} onChange={(e) => setDescentLen(e.target.value)} aria-label="Descent length" />
+                        <span>{distUnit}</span>
+                      </span>
+                      <span className="small">At least this long.</span>
+                    </label>
+                    <label>
+                      Most climbing on the way
+                      <span className="row">
+                        <input type="number" min={0} max={500} step={5} value={descentClimb} onChange={(e) => setDescentClimb(e.target.value)} aria-label="Most climbing on the descent" />
+                        <span>m</span>
+                      </span>
+                      <span className="small">It never climbs more than this above its lowest point so far. Elevation is only good to about 10 m.</span>
+                    </label>
+                    <label>
+                      Average steepness, at least
+                      <span className="row">
+                        <input type="number" min={DESCENT_DEFAULTS.minGrade} max={50} step={0.5} value={descentGrade} onChange={(e) => setDescentGrade(e.target.value)} aria-label="Descent average steepness" />
+                        <span>%</span>
+                      </span>
+                      <span className="small">Down at least this much on average, so a long gentle valley road doesn&apos;t count.</span>
+                    </label>
+                  </div>
+                )}
                 {magicMode ? (
                   <button className="magic-go" disabled={busy !== null || !difficulty}>{busy === 'magic' ? 'Working magic…' : '✨ Magic routes'}</button>
                 ) : (
@@ -479,6 +533,7 @@ function RouteCard({ route: r, color, on, select, showProfile }: { route: Planne
         <dt>Steepest</dt><dd>↑ {Math.round(s.maxUp)}% ↓ {Math.round(s.maxDown)}%</dd>
         <dt>New trail</dt><dd>{km(r.fresh)}, {pct(r.fresh / total)}</dd>
         {r.favorite !== undefined && <><dt>Favourites</dt><dd>{km(r.favorite)}, {pct(r.favorite / total)}</dd></>}
+        {r.descent && <><dt>Long descent</dt><dd>{km(r.descent.length)}, {height(r.descent.drop)} down, from {km(r.descent.from)}</dd></>}
       </dl>
       <p className="small">{mix}</p>
       <p className="small">Why {r.rating.difficulty.toLowerCase()}: {r.rating.reasons.join(', ')}.</p>
