@@ -61,6 +61,8 @@ export interface PlannedRoute {
   /** mtb:scale (or sac_scale on the same 0–6 scale), where tagged. */
   level: number | null;
   restricted: boolean;
+  /** The long descent asked for: metres from the start where it begins and ends, its length and drop. */
+  descent?: { from: number; to: number; length: number; drop: number };
 }
 
 /**
@@ -217,9 +219,19 @@ export function describe(p: Planned, ele: (lon: number, lat: number) => number, 
   const stats = statsOfLine(line);
   const rating = rate(stats, p.kinds, p.level);
   const name = `${p.heading[0]!.toUpperCase()}${p.heading.slice(1)} ${loop ? 'loop' : 'route'}, ${(stats.distance / 1000).toFixed(1)} km`;
+  let descent: PlannedRoute['descent'];
+  if (p.descent) {
+    let m = 0, from = 0;
+    for (let i = 1; i <= p.descent.to; i++) {
+      m += metres(p.line[i - 1]![0], p.line[i - 1]![1], p.line[i]![0], p.line[i]![1]);
+      if (i === p.descent.from) from = m;
+    }
+    descent = { from: Math.round(from), to: Math.round(m), length: Math.round(p.descent.length), drop: Math.round(p.descent.drop) };
+  }
   return {
     id, name, loop, line,
     stats, rating, fresh: Math.round(p.fresh), repeated: Math.round(p.repeated), ...(p.favorite ? { favorite: Math.round(p.favorite) } : {}), kinds: p.kinds, level: p.level, restricted: p.restricted,
+    ...(descent ? { descent } : {}),
   };
 }
 

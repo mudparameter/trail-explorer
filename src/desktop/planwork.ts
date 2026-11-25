@@ -9,6 +9,7 @@ import type { Shape } from '../core/shapes.ts';
 import { favoriteEdges, MAGIC, overlap, Planner, type MagicRequest, type Planned, type PlanRequest } from '../core/planner.ts';
 import { describe, elevated, statsOfLine, steepestDescents, type Difficulty, type PlannedRoute } from '../core/route.ts';
 import type { OsmWay } from '../core/roads.ts';
+import { addHeights } from '../core/descent.ts';
 import { decodeTerrarium, Elevation, TERRAIN_ZOOM } from '../core/terrain.ts';
 import { unpackTrack } from '../core/track.ts';
 
@@ -61,6 +62,8 @@ export function network(job: NetworkJob): NetworkResult {
     for (let k = 0; k < e.coords.length; k += 2) line.push([e.coords[k]!, e.coords[k + 1]!]);
     e.down = steepestDescents(line, at);
   }
+  // Heights for finding long descents, when a route asks for one.
+  addHeights(net, at);
   current = { key: job.key, net, terrainDir: job.terrainDir };
   return { geojson: networkGeoJson(net), ...coverage(net) };
 }
@@ -168,17 +171,20 @@ export function magic({ key, request, seen = [] }: { key: string; request: Magic
   const prof = MAGIC[request.difficulty];
   const { distance: d, tolerance: tol } = request;
   const found = new Map<string, { p: Planned; r: PlannedRoute }>();
+  let problem: unknown = null;
   for (const dist of [d, d + tol / 2, d - tol / 2].filter((x) => x >= 500)) {
     for (const newTrail of ['some', 'lots', 'little'] as const) {
       const req: PlanRequest = {
         start: request.start, finish: request.finish, distance: dist, climb: Math.round((prof.climbPerKm * dist) / 1000), newTrail,
         kinds: ['trail', 'track', 'cycleway', 'road'], allowRestricted: false,
         maxUp: prof.maxUp, maxDown: prof.maxDown, maxLevel: prof.maxLevel, variant: request.variant ?? 0, favorites: request.favorites === true,
+        descent: request.descent ?? null,
       };
       let planned: Planned[];
       try {
         planned = new Planner(net, req).plan(8, climbOf);
-      } catch {
+      } catch (e) {
+        problem = e;
         continue;
       }
       for (const p of planned) {
@@ -188,6 +194,8 @@ export function magic({ key, request, seen = [] }: { key: string; request: Magic
     }
   }
   const all = [...found.values()];
+  // With a long descent asked for, the planner's reason (no descent that long, say) is the one to give.
+  if (!all.length && request.descent && problem) throw problem;
   if (!all.length) throw new Error(seen.length ? 'No other routes from there. Try another distance or difficulty, or another start.' : 'No routes could be made from there. Try another start, or a bigger area.');
   // Near enough in distance first; then the closest difficulty and climbing to suit it,
   // and with favourites asked for, routes with about a quarter on them (or all there are).

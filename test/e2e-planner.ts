@@ -306,6 +306,24 @@ try {
   await w.getByLabel('Any', { exact: true }).check();
   await w.getByLabel('Include my favourite trails').uncheck();
 
+  // A long descent: down the hill, 1 km at least. Every route rides one; 20 km is more than the hill has, and says so.
+  await w.getByLabel('Include a long descent').check();
+  assert.equal(await w.getByLabel('Most climbing on the descent').inputValue(), '25');
+  assert.equal(await w.getByLabel('Descent average steepness').inputValue(), '3');
+  await w.getByLabel('Descent length').fill('1');
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await w.locator('.route-card').first().getByText('Long descent').waitFor({ timeout: 60000 });
+  const descents = (await w.locator('.route-card').allInnerTexts()).map((t) => t.match(/Long descent\s*([\d.]+) km \([\d.]+ mi\), ([\d,]+) m/));
+  console.log('descents per route:', descents.map((m) => m && `${m[1]} km, ${m[2]} m down`).join(' | '));
+  assert.ok(descents.every((m) => m && Number(m[1]) >= 1 && Number(m[2].replace(',', '')) >= 30), 'every route has a descent of 1 km or more, 3% at least');
+  await shot('2g-long-descent');
+  await w.locator('section.step', { hasText: 'Your ride' }).getByRole('button', { name: 'Change' }).click();
+  await w.getByLabel('Descent length').fill('20');
+  await w.getByRole('button', { name: 'Plan routes' }).click();
+  await w.getByText(/No descent here is 20\.0 km long\. The longest is [\d.]+ km/).waitFor({ timeout: 60000 });
+  console.log('too long:', await w.getByText(/No descent here is/).innerText());
+  await w.getByLabel('Include a long descent').uncheck();
+
   // The saved routes table: sort, rename, view, download, delete.
   await w.getByRole('button', { name: 'Saved routes' }).click();
   await w.getByRole('heading', { name: 'Saved routes' }).waitFor();

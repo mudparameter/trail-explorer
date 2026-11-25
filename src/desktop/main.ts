@@ -3,6 +3,7 @@ import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promise
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
 import type { AreasState, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
+import { DESCENT_DEFAULTS, type DescentWish } from '../core/descent.ts';
 import { MAGIC, type MagicRequest, type PlanRequest } from '../core/planner.ts';
 import { KINDS, type OsmWay } from '../core/roads.ts';
 import { shapeBounds, type Shape } from '../core/shapes.ts';
@@ -733,6 +734,14 @@ function start() {
     const difficulty = typeof x.difficulty === 'string' && x.difficulty in MAGIC ? (x.difficulty as Difficulty) : null;
     return { variant, seen, difficulty };
   };
+  /** A long descent asked for, checked; null when not asked for. */
+  const descentOf = (x: any): DescentWish | null => {
+    if (x == null) return null;
+    if (!(typeof x.length === 'number' && x.length >= 500 && x.length <= 100_000)) throw new Error('Choose a descent length from 0.5 to 100 km.');
+    if (!(typeof x.maxClimb === 'number' && x.maxClimb >= 0 && x.maxClimb <= 500)) throw new Error('Choose the most the descent may climb, from 0 to 500 m.');
+    if (!(typeof x.minGrade === 'number' && x.minGrade >= DESCENT_DEFAULTS.minGrade && x.minGrade <= 50)) throw new Error(`Choose the descent's average steepness, from ${DESCENT_DEFAULTS.minGrade} to 50%.`);
+    return { length: x.length, maxClimb: x.maxClimb, minGrade: x.minGrade };
+  };
   handle('planRoutes', (key: unknown, r: any, o: unknown) => result(async () => {
     const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
     if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
@@ -748,6 +757,7 @@ function start() {
     const request: PlanRequest = {
       start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true,
       maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true, tolerance: r.tolerance ?? null,
+      descent: descentOf(r.descent),
     };
     planned = await runJob<PlannedRoute[]>('planRoutes', { key, request, seen: more.seen, difficulty: more.difficulty });
     if (!planned.length) throw new Error('No routes could be made from there. Try a shorter distance, more kinds of path, or a start inside an area.');
@@ -760,7 +770,7 @@ function start() {
     if (!(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
     if (!(r.difficulty in MAGIC)) throw new Error('Choose a difficulty for magic routes.');
     const more = planMore(o);
-    const request: MagicRequest = { start: r.start, finish: r.finish, distance: r.distance, tolerance: r.tolerance, difficulty: r.difficulty, variant: more.variant, favorites: r.favorites === true };
+    const request: MagicRequest = { start: r.start, finish: r.finish, distance: r.distance, tolerance: r.tolerance, difficulty: r.difficulty, variant: more.variant, favorites: r.favorites === true, descent: descentOf(r.descent) };
     planned = await runJob<PlannedRoute[]>('planMagic', { key, request, seen: more.seen });
     return planned;
   }));

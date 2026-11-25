@@ -141,6 +141,14 @@ export function Help() {
         favourite trails, in step 3, takes in the paths you have ridden most in those areas, riding along a stretch of them.
       </p>
       <p>
+        Include a long descent, in step 3, makes every route ride one continuous stretch downhill of at least the length you set,
+        such as 10 km. It may climb a little on the way, never more than Most climbing on the way (25 m unless you change it) above
+        its lowest point so far, and must drop at least the average steepness you set (3% or more). It uses the paths you chose,
+        and roads may join trails for up to 500 m at a time even when roads are off. Your steepest descent and difficulty limits
+        apply to it too, in normal and magic mode. If the chosen areas have no descent that long, you are told the longest there is.
+        The descent is shown on each route, with its length and drop. Routes may come out longer than the distance to fit it in.
+      </p>
+      <p>
         Routes are worked out on your computer from the downloaded OpenStreetMap paths, the same way every time. They stay inside the
         chosen areas. Elevation is from free terrain data with 10 to 30 m detail, so short steep pitches are smoothed and climbing can be
         off by 10 to 20%. Paths marked private or no bikes are left out unless you allow them.

@@ -29,10 +29,13 @@ export interface Edge {
   passes?: number;
   /** Steepest descent in %, going a→b and going b→a. Left out, or NaN, where elevation is unknown. */
   down?: [number, number];
+  /** Elevations every 10 m from a to b, for finding long descents. Left out where unknown. */
+  heights?: number[];
 }
 
 export interface Network {
-  nodes: { lon: number; lat: number }[];
+  /** `ele` is filled in for finding long descents; NaN where unknown. */
+  nodes: { lon: number; lat: number; ele?: number }[];
   edges: Edge[];
 }
 
