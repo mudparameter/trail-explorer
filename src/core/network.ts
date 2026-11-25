@@ -3,12 +3,8 @@
 // may use it, and how much of it you have ridden. No Electron or DOM code here.
 import type { FeatureCollection } from 'geojson';
 import { kindOf, type OsmWay, type RoadKind } from './roads.ts';
+import { insideAny, type Shape } from './shapes.ts';
 import { M_PER_DEG, metres } from './track.ts';
-
-export interface Circle {
-  center: [number, number];
-  radius: number;
-}
 
 export interface Edge {
   /** Node indexes at each end. */
@@ -40,8 +36,6 @@ export interface Network {
   edges: Edge[];
 }
 
-export const insideAny = (circles: Circle[], lon: number, lat: number) => circles.some((c) => metres(c.center[0], c.center[1], lon, lat) <= c.radius);
-
 /** Metres between the points checked along an edge for whether it is ridden. */
 const SAMPLE = 10;
 
@@ -69,11 +63,11 @@ function onewayOf(t: Record<string, string>): 0 | 1 | -1 {
 
 /**
  * Builds the network from downloaded ways, keeping only what is inside the
- * circles. Ways are split where they meet, so every junction is a node.
+ * areas' shapes. Ways are split where they meet, so every junction is a node.
  * `ridden(lon, lat, bearing)` says whether you have ridden there, if known.
  */
-export function buildNetwork(ways: OsmWay[], circles: Circle[], ridden?: (lon: number, lat: number, bearing: number) => boolean, passes?: (lon: number, lat: number, bearing: number) => number): Network {
-  // Runs of consecutive nodes inside the circles.
+export function buildNetwork(ways: OsmWay[], shapes: Shape[], ridden?: (lon: number, lat: number, bearing: number) => boolean, passes?: (lon: number, lat: number, bearing: number) => number): Network {
+  // Runs of consecutive nodes inside the shapes.
   const runs: { way: OsmWay; kind: RoadKind; ids: number[]; pts: [number, number][] }[] = [];
   for (const way of ways) {
     const kind = kindOf(way.tags);
@@ -86,7 +80,7 @@ export function buildNetwork(ways: OsmWay[], circles: Circle[], ridden?: (lon: n
       pts = [];
     };
     way.coords.forEach((p, i) => {
-      if (insideAny(circles, p[0], p[1])) {
+      if (insideAny(shapes, p[0], p[1])) {
         ids.push(way.nodes[i]!);
         pts.push(p);
       } else flush();

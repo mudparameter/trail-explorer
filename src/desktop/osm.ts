@@ -3,7 +3,8 @@
 // for routes later: ways list their node ids, and ways that meet share a node.
 // Nodes have an elevation column, empty until elevation data is added.
 import { DatabaseSync } from 'node:sqlite';
-import { circleBounds, tilesInBounds, type OsmWay } from '../core/roads.ts';
+import { tilesInBounds, type OsmWay } from '../core/roads.ts';
+import { shapeBounds, type Shape } from '../core/shapes.ts';
 
 const toBlob = (ids: number[]) => new Uint8Array(Float64Array.from(ids).buffer);
 // Copy first: SQLite's bytes may not be aligned for a Float64Array.
@@ -67,9 +68,9 @@ export class OsmStore {
     for (const k of tiles) this.have.add(k);
   }
 
-  /** Every way that may cross a circle, with its points. */
-  waysIn(center: [number, number], radius: number): OsmWay[] {
-    const [w, s, e, n] = circleBounds(center, radius);
+  /** Every way that may cross a shape, with its points. */
+  waysIn(shape: Shape): OsmWay[] {
+    const [w, s, e, n] = shapeBounds(shape);
     const rows = this.db.prepare('SELECT id, tags, nodes FROM way WHERE e >= ? AND w <= ? AND n >= ? AND s <= ?').all(w, e, s, n) as { id: number; tags: string; nodes: Uint8Array }[];
     const ways = rows.map((r) => ({ id: r.id, tags: JSON.parse(r.tags) as Record<string, string>, nodes: fromBlob(r.nodes) }));
     const ids = [...new Set(ways.flatMap((x) => x.nodes))];

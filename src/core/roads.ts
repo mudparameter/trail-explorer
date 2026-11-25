@@ -1,8 +1,8 @@
-// Roads and trails inside a circle, from OpenStreetMap data served by an Overpass API.
+// Roads and trails inside an area, from OpenStreetMap data served by an Overpass API.
 // No Node, Electron or DOM here: any host can fetch the query and pass the reply in.
 import type { FeatureCollection } from 'geojson';
 import type { Bounds } from './api.ts';
-import { M_PER_DEG } from './track.ts';
+import { clipToShapes, projector, shapeBounds, type Shape } from './shapes.ts';
 
 export type RoadKind = 'trail' | 'track' | 'cycleway' | 'road';
 export const KINDS: { kind: RoadKind; label: string; color: string }[] = [
@@ -19,7 +19,7 @@ export interface Road {
   /** Null when OpenStreetMap has no name for it. */
   name: string | null;
   kind: RoadKind;
-  /** Metres inside the circle. */
+  /** Metres inside the area. */
   length: number;
   /** Most common values, by length, such as "gravel" or "MTB S2". */
   surface: string | null;
@@ -32,10 +32,8 @@ export interface Road {
   bounds: Bounds;
 }
 
-export const MIN_AREA = 50;
-/** Shorter than this inside a circle is left out. */
+/** Shorter than this inside an area is left out. */
 const MIN_ROAD = 10;
-export const MAX_AREA = 10_000;
 /** Public Overpass servers are often busy, so the config may list several to try in order. */
 export const DEFAULT_OVERPASS = ['https://overpass-api.de/api/interpreter'];
 export const OSM_ATTRIBUTION = '© OpenStreetMap contributors (ODbL)';
@@ -52,8 +50,8 @@ const HIGHWAY: Record<string, RoadKind> = {
 export const kindOf = (tags: Record<string, string>): RoadKind | undefined => HIGHWAY[tags.highway ?? ''];
 
 // --- tiles ----------------------------------------------------------------------
-// Data is downloaded and kept by fixed map tiles, not by circle, so circles that
-// overlap share it: a new circle only downloads the tiles nothing has asked for yet.
+// Data is downloaded and kept by fixed map tiles, not by area, so areas that
+// overlap share it: a new area only downloads the tiles nothing has asked for yet.
 
 /** Zoom 15 tiles are about 1.2 km across at the equator, 0.9 km in Spain. */
 export const TILE_ZOOM = 15;
@@ -81,19 +79,17 @@ export function tilesInBounds([w, s, e, n]: Bounds, max = 40_000): number[] {
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push(tileKey(x, y));
   return out;
 }
-export function circleBounds(center: [number, number], radius: number): Bounds {
-  const dLat = radius / M_PER_DEG;
-  const dLon = dLat / Math.max(Math.cos((center[1] * Math.PI) / 180), 0.01);
-  return [center[0] - dLon, center[1] - dLat, center[0] + dLon, center[1] + dLat];
-}
-/** The tiles a circle touches, sorted. */
-export function tilesFor(center: [number, number], radius: number): number[] {
-  const pr = projector(center);
-  return tilesInBounds(circleBounds(center, radius)).filter((k) => {
+/** The tiles a shape touches, sorted. */
+export function tilesFor(shape: Shape): number[] {
+  const all = tilesInBounds(shapeBounds(shape));
+  if (shape.kind === 'rect') return all;
+  const pr = projector(shape.center);
+  const [cx, cy] = shape.center;
+  return all.filter((k) => {
     const [w, s, e, n] = tileBounds(k);
     // Nearest point of the tile to the centre.
-    const [x, y] = pr.to([Math.max(w, Math.min(e, center[0])), Math.max(s, Math.min(n, center[1]))]);
-    return x * x + y * y <= radius * radius;
+    const [x, y] = pr.to([Math.max(w, Math.min(e, cx)), Math.max(s, Math.min(n, cy))]);
+    return x * x + y * y <= shape.radius * shape.radius;
   }).sort((a, b) => a - b);
 }
 
@@ -154,124 +150,6 @@ export function parseOverpass(reply: unknown): OsmWay[] {
   return out;
 }
 
-/** Local flat coordinates in metres around the circle's centre. Accurate enough for 10 km. */
-function projector(center: [number, number]) {
-  const k = Math.cos((center[1] * Math.PI) / 180) * M_PER_DEG;
-  return {
-    to: (p: [number, number]): [number, number] => [(p[0] - center[0]) * k, (p[1] - center[1]) * M_PER_DEG],
-    from: (x: number, y: number): [number, number] => [center[0] + x / k, center[1] + y / M_PER_DEG],
-  };
-}
-
-/** Where the segment a→b crosses the circle, as fractions along it, sorted. */
-function crossings(a: [number, number], b: [number, number], r: number): number[] {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  const A = dx * dx + dy * dy;
-  if (A === 0) return [];
-  const B = 2 * (a[0] * dx + a[1] * dy);
-  const C = a[0] * a[0] + a[1] * a[1] - r * r;
-  const disc = B * B - 4 * A * C;
-  if (disc <= 0) return [];
-  const s = Math.sqrt(disc);
-  return [(-B - s) / (2 * A), (-B + s) / (2 * A)].filter((t) => t > 0 && t < 1);
-}
-
-/** The parts of a line inside the circle, cut exactly at its edge, with their length in metres. */
-export function clipToCircle(line: [number, number][], center: [number, number], radius: number): { lines: [number, number][][]; length: number } {
-  const pr = projector(center);
-  const ps = line.map(pr.to);
-  const inside = (p: [number, number]) => p[0] * p[0] + p[1] * p[1] <= radius * radius;
-  const out: [number, number][][] = [];
-  let length = 0;
-  let cur: [number, number][] | null = null;
-  let last: [number, number] | null = null;
-  const add = (p: [number, number]) => {
-    if (last) length += Math.hypot(p[0] - last[0], p[1] - last[1]);
-    cur!.push(pr.from(p[0], p[1]));
-    last = p;
-  };
-  const end = () => {
-    if (cur && cur.length >= 2) out.push(cur);
-    cur = null;
-    last = null;
-  };
-  for (let i = 0; i < ps.length; i++) {
-    const p = ps[i]!;
-    if (i === 0) {
-      if (inside(p)) {
-        cur = [];
-        add(p);
-      }
-      continue;
-    }
-    const a = ps[i - 1]!;
-    const at = (t: number): [number, number] => [a[0] + (p[0] - a[0]) * t, a[1] + (p[1] - a[1]) * t];
-    const ts = crossings(a, p, radius);
-    // Each crossing switches between inside and outside.
-    for (const t of ts) {
-      if (cur) {
-        add(at(t));
-        end();
-      } else {
-        cur = [];
-        add(at(t));
-      }
-    }
-    if (cur) add(p);
-    else if (inside(p)) {
-      // Started exactly on the edge.
-      cur = [];
-      add(p);
-    }
-  }
-  end();
-  return { lines: out, length };
-}
-
-/**
- * The parts of a line inside any of the circles, with their length in metres.
- * Overlaps count once, so circles joined into one area never count a road twice.
- */
-export function clipToCircles(line: [number, number][], circles: { center: [number, number]; radius: number }[]): { lines: [number, number][][]; length: number } {
-  if (circles.length === 1) return clipToCircle(line, circles[0]!.center, circles[0]!.radius);
-  const pr = projector(circles[0]!.center);
-  const ps = line.map(pr.to);
-  const cs = circles.map((c) => ({ at: pr.to(c.center), r: c.radius }));
-  const inside = (p: [number, number]) => cs.some((c) => (p[0] - c.at[0]) ** 2 + (p[1] - c.at[1]) ** 2 <= c.r * c.r);
-  const out: [number, number][][] = [];
-  let length = 0;
-  let cur: [number, number][] | null = null;
-  let last: [number, number] | null = null;
-  const add = (p: [number, number]) => {
-    if (last && Math.abs(last[0] - p[0]) < 1e-6 && Math.abs(last[1] - p[1]) < 1e-6) return;
-    if (last) length += Math.hypot(p[0] - last[0], p[1] - last[1]);
-    cur!.push(pr.from(p[0], p[1]));
-    last = p;
-  };
-  const end = () => {
-    if (cur && cur.length >= 2) out.push(cur);
-    cur = null;
-    last = null;
-  };
-  for (let i = 1; i < ps.length; i++) {
-    const a = ps[i - 1]!, b = ps[i]!;
-    const at = (t: number): [number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-    // Cut the segment wherever it crosses any circle, and keep the pieces whose middle is inside one.
-    const ts = [0, ...cs.flatMap((c) => crossings([a[0] - c.at[0], a[1] - c.at[1]], [b[0] - c.at[0], b[1] - c.at[1]], c.r)), 1].sort((x, y) => x - y);
-    for (let j = 1; j < ts.length; j++) {
-      const t0 = ts[j - 1]!, t1 = ts[j]!;
-      if (t1 - t0 < 1e-12) continue;
-      if (inside(at((t0 + t1) / 2))) {
-        if (!cur) cur = [];
-        add(at(t0));
-        add(at(t1));
-      } else end();
-    }
-  }
-  end();
-  return { lines: out, length };
-}
-
 function difficulty(t: Record<string, string>): string | null {
   const mtb = t['mtb:scale'];
   if (mtb && /^[0-6][+-]?$/.test(mtb)) return `MTB S${mtb}`;
@@ -283,19 +161,14 @@ function difficulty(t: Record<string, string>): string | null {
 }
 const top = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
-/** The roads and trails inside a circle, from ways, longest first within each kind. */
-export function roadsIn(ways: OsmWay[], center: [number, number], radius: number): Road[] {
-  return roadsInCircles(ways, [{ center, radius }]);
-}
-
-/** The roads and trails inside any of the circles, as one area. */
-export function roadsInCircles(ways: OsmWay[], circles: { center: [number, number]; radius: number }[]): Road[] {
+/** The roads and trails inside any of the shapes, as one area, from ways. Longest first within each kind. */
+export function roadsIn(ways: OsmWay[], shapes: Shape[]): Road[] {
   const groups = new Map<string, Road & { surfaces: Map<string, number>; levels: Map<string, number> }>();
   for (const way of ways) {
     const t = way.tags;
     const kind = kindOf(t);
     if (!kind) continue;
-    const clipped = clipToCircles(way.coords, circles);
+    const clipped = clipToShapes(way.coords, shapes);
     if (!clipped.lines.length || clipped.length < 1) continue;
     const name = (t.name ?? t.ref ?? '').trim() || null;
     const key = `${kind}:${name?.toLowerCase() ?? ''}`;
@@ -324,8 +197,8 @@ export function roadsInCircles(ways: OsmWay[], circles: { center: [number, numbe
     .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || Number(a.name === null) - Number(b.name === null) || b.length - a.length);
 }
 
-/** Reads an Overpass reply straight into roads inside a circle. */
-export const readOverpass = (reply: unknown, center: [number, number], radius: number): Road[] => roadsIn(parseOverpass(reply), center, radius);
+/** Reads an Overpass reply straight into roads inside a shape. */
+export const readOverpass = (reply: unknown, shape: Shape): Road[] => roadsIn(parseOverpass(reply), [shape]);
 
 /** Total length of each kind. */
 export function kindTotals(roads: Road[]): Partial<Record<RoadKind, number>> {

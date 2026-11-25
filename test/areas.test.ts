@@ -3,10 +3,11 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { areasText, newAreaId, parseAreas, unionEdge, type Area } from '../src/core/areas.ts';
+import { areasText, newAreaId, parseAreas, type Area } from '../src/core/areas.ts';
 import { parseConfig } from '../src/core/config.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 import { tilesFor } from '../src/core/roads.ts';
+import { drawnShape, MAX_SIDE, rectFrom, rectSize, shapeProblem, unionEdge, type Shape } from '../src/core/shapes.ts';
 import { Areas } from '../src/desktop/areas.ts';
 import { OsmStore } from '../src/desktop/osm.ts';
 
@@ -14,7 +15,8 @@ const C: [number, number] = [-0.47, 39.7];
 const K = M_PER_DEG * Math.cos((C[1] * Math.PI) / 180);
 /** A point x metres east and y metres north of C. */
 const P = (x: number, y = 0): [number, number] => [C[0] + x / K, C[1] + y / M_PER_DEG];
-const area = (id: string, center: [number, number], radius: number, more: Partial<Area> = {}): Area => ({ id, name: null, center, radius, on: true, hide: [], group: null, ...more });
+const circle = (center: [number, number], radius: number): Shape => ({ kind: 'circle', center, radius });
+const area = (id: string, center: [number, number], radius: number, more: Partial<Area> = {}): Area => ({ id, name: null, shape: circle(center, radius), on: true, hide: [], group: null, ...more });
 
 // --- areas.json -----------------------------------------------------------------
 
@@ -30,7 +32,7 @@ test('areas.json is read, with optional fields and problems reported', () => {
     ],
   }));
   assert.equal(areas.length, 3);
-  assert.deepEqual(areas[0], { id: 'home', name: 'Calderona', center: [-0.47, 39.7], radius: 1500, on: false, hide: ['road'], group: null });
+  assert.deepEqual(areas[0], { id: 'home', name: 'Calderona', shape: circle([-0.47, 39.7], 1500), on: false, hide: ['road'], group: null });
   assert.equal(areas[1]!.on, true);
   assert.match(areas[1]!.id, /^[a-z0-9-]+$/);
   assert.equal(parseAreas(JSON.stringify({ areas: [{ center: [-0.5, 39.6], radius: 800 }] })).areas[0]!.id, areas[1]!.id, 'the same id each read');
@@ -48,7 +50,7 @@ test('areas.json is written one area per line, keeping comments, and reads back 
   assert.equal(text.split('\n').filter((l) => l.includes('"center"')).length, 2);
   const back = parseAreas(text);
   assert.deepEqual(back.problems, []);
-  assert.deepEqual(back.areas, [{ ...list[0]!, center: [-0.470123, 39.7], radius: 1500 }, list[1]]);
+  assert.deepEqual(back.areas, [{ ...list[0]!, shape: circle([-0.470123, 39.7], 1500) }, list[1]]);
   assert.deepEqual(parseAreas(areasText([])).areas, []);
   // It is part of the config.
   assert.equal(parseConfig({ 'areas.json': text }).config.areas.length, 2);
@@ -89,11 +91,11 @@ test('groups are read and written with their circles, and empty or unknown ones 
 test('the outline around overlapping circles leaves out where they overlap, and meets where they cross', () => {
   const dist = (p: [number, number], c: [number, number]) => Math.hypot((p[0] - c[0]) * K, (p[1] - c[1]) * M_PER_DEG);
   // Apart: each circle is a whole ring.
-  const apart = unionEdge([{ center: C, radius: 500 }, { center: P(2000), radius: 500 }]);
+  const apart = unionEdge([circle(C, 500), circle(P(2000), 500)]);
   assert.equal(apart.length, 2);
   assert.deepEqual(apart[0]![0], apart[0]!.at(-1));
   // Overlapping: one arc each, ending exactly on the other circle.
-  const a = { center: C, radius: 500 }, b = { center: P(600), radius: 500 };
+  const a = { kind: 'circle' as const, center: C, radius: 500 }, b = { kind: 'circle' as const, center: P(600), radius: 500 };
   const both = unionEdge([a, b]);
   assert.equal(both.length, 2);
   for (const [line, other] of [[both[0]!, b], [both[1]!, a]] as const) {
@@ -101,7 +103,87 @@ test('the outline around overlapping circles leaves out where they overlap, and 
     assert.ok(Math.abs(dist(line[0]!, other.center) - other.radius) < 0.5 && Math.abs(dist(line.at(-1)!, other.center) - other.radius) < 0.5, 'ends where the circles cross');
   }
   // A circle inside another adds no edge.
-  assert.equal(unionEdge([{ center: C, radius: 1000 }, { center: P(100), radius: 200 }]).length, 1);
+  assert.equal(unionEdge([circle(C, 1000), circle(P(100), 200)]).length, 1);
+});
+
+test('rectangles are read and written as a box, and bad ones are reported', () => {
+  const box = rectFrom(P(-1000, -500), P(1000, 500));
+  if (box.kind !== 'rect') throw new Error('not a rectangle');
+  const { areas, problems } = parseAreas(JSON.stringify({
+    areas: [
+      { id: 'r', name: 'Valley', box: box.box, hide: ['road'] },
+      { box: box.box.map((v) => v + 0.1) },
+      { id: 'flipped', box: [box.box[2], box.box[1], box.box[0], box.box[3]] },
+      { id: 'thin', box: [box.box[0], box.box[1], box.box[2], box.box[1] + 50 / M_PER_DEG] },
+      { id: 'huge', box: [-1, 39, 1, 40] },
+      { id: 'both', box: box.box, center: C, radius: 500 },
+    ],
+  }));
+  assert.deepEqual(areas.map((a) => a.id).filter((id) => !id.startsWith('r') || id === 'r'), ['r', 'both']);
+  assert.deepEqual(areas[0], { id: 'r', name: 'Valley', shape: box, on: true, hide: ['road'], group: null });
+  assert.match(areas[1]!.id, /^r[a-z0-9-]+$/);
+  assert.ok(areas[1]!.id.length <= 40);
+  assert.equal(parseAreas(JSON.stringify({ areas: [{ box: box.box.map((v) => v + 0.1) }] })).areas[0]!.id, areas[1]!.id, 'the same id each read');
+  // "box" wins over "center" and "radius".
+  assert.equal(areas[2]!.shape.kind, 'rect');
+  assert.equal(problems.length, 3, problems.join('\n'));
+  assert.match(problems.join(' '), /"box" should be \[west, south, east, north\]/);
+  assert.match(problems.join(' '), /"box" sides should be 100 to 20000 metres/);
+
+  // Written back, circles and rectangles read the same, rounded.
+  const text = areasText([...areas, area('c', C, 500)]);
+  assert.equal(text.split('\n').filter((l) => l.includes('"box"')).length, 3);
+  assert.equal(text.split('\n').filter((l) => l.includes('"center"')).length, 1);
+  const back = parseAreas(text);
+  assert.deepEqual(back.problems, []);
+  assert.equal(back.areas.length, 4);
+  for (const [i, a] of back.areas.slice(0, 3).entries()) {
+    const was = areas[i]!.shape, now = a.shape;
+    assert.ok(was.kind === 'rect' && now.kind === 'rect' && now.box.every((v, j) => Math.abs(v - was.box[j]!) < 1e-6));
+  }
+});
+
+test('two clicks make a circle or a rectangle, no bigger than an area can be', () => {
+  const c = drawnShape('circle', C, P(300, 400));
+  assert.ok(c.kind === 'circle' && Math.abs(c.radius - 500) < 0.5);
+  const far = drawnShape('circle', C, P(50_000));
+  assert.ok(far.kind === 'circle' && far.radius === 10_000);
+  // Corners in any order give the same box.
+  assert.deepEqual(drawnShape('rect', P(500, 300), P(-500, -300)), drawnShape('rect', P(-500, -300), P(500, 300)));
+  const r = drawnShape('rect', P(-500, -300), P(500, 300));
+  assert.ok(r.kind === 'rect');
+  const [w, h] = rectSize(r.box);
+  assert.ok(Math.abs(w - 1000) < 1 && Math.abs(h - 600) < 1, `${w} × ${h}`);
+  assert.equal(shapeProblem(r), null);
+  // Dragged too far, each side stops just short of the limit, measured as the file checks it.
+  for (const to of [P(90_000, 5_000), P(5_000, -90_000), P(-90_000, 90_000)]) {
+    const big = drawnShape('rect', C, to);
+    assert.ok(big.kind === 'rect');
+    assert.ok(Math.max(...rectSize(big.box)) <= MAX_SIDE, String(rectSize(big.box)));
+    assert.equal(shapeProblem(big), null);
+  }
+  assert.match(shapeProblem(drawnShape('rect', C, P(50, 500)))!, /rectangle's sides/);
+  assert.match(shapeProblem(drawnShape('circle', C, P(20)))!, /circle's radius/);
+});
+
+test('the outline around a circle and rectangles leaves out where they overlap', () => {
+  const box = rectFrom(P(0, -300), P(1000, 300));
+  if (box.kind !== 'rect') throw new Error('not a rectangle');
+  const inBox = (p: [number, number]) => p[0] > box.box[0] + 1e-9 && p[0] < box.box[2] - 1e-9 && p[1] > box.box[1] + 1e-9 && p[1] < box.box[3] - 1e-9;
+  const round = circle(C, 500);
+  const edge = unionEdge([round, box]);
+  assert.equal(edge.length, 2, 'an arc of the circle and the rest of the box');
+  const dist = (p: [number, number]) => Math.hypot((p[0] - C[0]) * K, (p[1] - C[1]) * M_PER_DEG);
+  for (const p of edge[0]!) assert.ok(!inBox(p), 'no part of the arc inside the box');
+  for (const p of edge[1]!.slice(1, -1)) assert.ok(dist(p) >= 499.5, 'no part of the box inside the circle');
+  // The box's outline keeps its far corners exactly.
+  const corners = edge[1]!.filter((p) => (p[0] === box.box[0] || p[0] === box.box[2]) && (p[1] === box.box[1] || p[1] === box.box[3]));
+  assert.equal(corners.length, 2);
+  // Ends meet on the circle.
+  for (const p of [edge[1]![0]!, edge[1]!.at(-1)!]) assert.ok(Math.abs(dist(p) - 500) < 0.5);
+  // A lone rectangle is its closed ring of corners; one inside another adds nothing.
+  assert.equal(unionEdge([box])[0]!.length, 5);
+  assert.equal(unionEdge([box, rectFrom(P(100, -100), P(200, 100))]).length, 1);
 });
 
 test('new area ids are short and unused', () => {
@@ -141,17 +223,17 @@ async function until(ok: () => boolean) {
 test('the store keeps one copy of each way and node, finds them by circle, and prunes what no area needs', () => {
   const store = new OsmStore(join(mkdtempSync(join(tmpdir(), 'te-osm-')), 'osm.db'));
   const ways = WORLD.map((w) => ({ id: w.id, tags: w.tags, nodes: w.nodes, coords: w.pts }));
-  const tiles = tilesFor(C, 500);
+  const tiles = tilesFor(circle(C, 500));
   store.save(ways, tiles);
   store.save(ways.slice(0, 2), tiles); // the same again changes nothing
   assert.deepEqual(store.counts(), { ways: 3, nodes: 9, tiles: tiles.length });
-  const near = store.waysIn(C, 500);
+  const near = store.waysIn(circle(C, 500));
   assert.deepEqual(near.map((w) => w.id).sort(), [1, 2]);
   assert.deepEqual(near.find((w) => w.id === 2)!.coords[1], P(0));
   // Shared node 103 is one row.
   assert.equal(store.counts().nodes, 9);
   // Keep only the tiles around the middle: the far path goes, with its nodes.
-  assert.equal(store.prune(new Set(tilesFor(C, 200))), 1);
+  assert.equal(store.prune(new Set(tilesFor(circle(C, 200)))), 1);
   assert.deepEqual(store.counts().ways, 2);
   assert.equal(store.counts().nodes, 7);
   store.prune(new Set());
@@ -194,6 +276,15 @@ test('areas download in parts, share tiles, and are ready without downloading ag
   // Two 800 m circles 1000 m apart along the trail: 2600 m of it, not 3200.
   assert.ok(Math.abs(g!.totals.trail! - 2600) < 5, JSON.stringify(g!.totals));
   assert.ok(areas.roadsOf('g-x')!.roads.length > 0);
+  // A circle and a rectangle can be joined: a 1600 m box along the trail from 0 to 1600, and the 800 m circle at -500.
+  const strip: Area = { id: 'strip', name: null, shape: rectFrom(P(0, -100), P(1600, 100)), on: true, hide: [], group: 'g-x' };
+  areas.set([area('big', C, 2500), area('small2', P(-500), 800, { group: 'g-x' }), strip], [{ id: 'g-x', name: 'X', joined: true }]);
+  const [mixed] = areas.groupView();
+  assert.equal(mixed!.state, 'ready');
+  // The circle covers -1300 to 300 of the trail, the box 0 to 1600: 2900 m, the overlap once.
+  assert.ok(Math.abs(mixed!.totals.trail! - 2900) < 5, JSON.stringify(mixed!.totals));
+  // The track, along the box's west side, is counted once where it is in both: the circle's chord.
+  assert.ok(Math.abs(mixed!.totals.track! - 2 * Math.sqrt(800 ** 2 - 500 ** 2)) < 5, JSON.stringify(mixed!.totals));
   // Separate, it has no roads of its own.
   areas.set([area('big', C, 2500), area('small', P(500), 800, { group: 'g-x' })], [{ id: 'g-x', name: 'X', joined: false }]);
   assert.deepEqual(areas.groupView()[0]!.totals, {});
@@ -202,8 +293,8 @@ test('areas download in parts, share tiles, and are ready without downloading ag
   // A bigger one downloads only the ring around it.
   areas.set([area('big', C, 2500), area('small', P(500), 800), area('bigger', C, 3500)]);
   await until(() => areas.view()[2]!.state === 'ready');
-  const first = new Set(tilesFor(C, 2500));
-  const ring = tilesFor(C, 3500).filter((k) => !first.has(k));
+  const first = new Set(tilesFor(circle(C, 2500)));
+  const ring = tilesFor(circle(C, 3500)).filter((k) => !first.has(k));
   assert.equal(saved.length, first.size + ring.length, 'every tile downloaded exactly once');
   assert.equal(new Set(saved).size, saved.length);
 
@@ -212,7 +303,7 @@ test('areas download in parts, share tiles, and are ready without downloading ag
   areas.prune();
   assert.equal(areas.view()[0]!.state, 'ready');
   assert.deepEqual(areas.roadsOf('small')!.roads.map((r) => r.name), ['Ridge trail', null]);
-  assert.ok(store.counts().tiles === tilesFor(P(500), 800).length);
+  assert.ok(store.counts().tiles === tilesFor(circle(P(500), 800)).length);
   assert.ok(changes > 0);
   areas.stop();
   store.close();

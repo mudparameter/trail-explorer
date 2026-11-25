@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipToCircle, clipToCircles, distance, overpassQuery, parseOverpass, readOverpass, roadsGeoJson, tileBounds, tileKey, tilesFor, tileXY } from '../src/core/roads.ts';
+import { distance, overpassQuery, parseOverpass, readOverpass, roadsGeoJson, tileBounds, tileKey, tilesFor, tileXY } from '../src/core/roads.ts';
+import { clipToShapes, rectFrom, type Shape } from '../src/core/shapes.ts';
 import { M_PER_DEG } from '../src/core/track.ts';
 
 const C: [number, number] = [0, 0];
@@ -10,6 +11,8 @@ let wid = 0;
 const way = (highway: string, pts: [number, number][], tags: Record<string, string> = {}) => ({
   type: 'way', id: ++wid, tags: { highway, ...tags }, nodes: pts.map((_, i) => wid * 100 + i), geometry: pts.map(([lon, lat]) => ({ lon, lat })),
 });
+const circle = (center: [number, number], radius: number): Shape => ({ kind: 'circle', center, radius });
+const clipToCircle = (line: [number, number][], center: [number, number], radius: number) => clipToShapes(line, [circle(center, radius)]);
 const near = (a: number, b: number, tol = 0.5) => assert.ok(Math.abs(a - b) <= tol, `${a} is not ${b}`);
 
 test('a line through the centre is cut at the edge on both sides', () => {
@@ -49,7 +52,7 @@ test('ways are grouped by name and kind, longest first, unnamed last', () => {
       way('platform', [P(0), P(10)]),
       { type: 'node', lat: 0, lon: 0 },
     ],
-  }, C, 200);
+  }, circle(C, 200));
   assert.deepEqual(roads.map((r) => `${r.kind} ${r.name}`), ['trail Ridge trail', 'trail Short walk', 'trail null', 'track null', 'road High Street']);
   const ridge = roads[0]!;
   near(ridge.length, 200, 1);
@@ -67,14 +70,14 @@ test('ways are grouped by name and kind, longest first, unnamed last', () => {
 });
 
 test('a reply that is not Overpass JSON is refused', () => {
-  assert.throws(() => readOverpass({ hello: 1 }, C, 100), /unexpected/);
+  assert.throws(() => readOverpass({ hello: 1 }, circle(C, 100)), /unexpected/);
 });
 
 test('a circle touches the tiles it overlaps, and the query asks for them as boxes', () => {
   const c: [number, number] = [-0.47, 39.7];
-  const small = tilesFor(c, 100);
+  const small = tilesFor(circle(c, 100));
   assert.ok(small.length >= 1 && small.length <= 4);
-  const big = tilesFor(c, 5000);
+  const big = tilesFor(circle(c, 5000));
   // About 0.94 km tiles here: a 10 km wide circle covers roughly π·5.3² ≈ 90 of them.
   assert.ok(big.length > 70 && big.length < 160, String(big.length));
   for (const k of small) assert.ok(big.includes(k), 'a bigger circle covers the smaller one');
@@ -104,15 +107,45 @@ test('distances read naturally', () => {
 });
 
 test('a line is clipped to several circles at once, counting overlaps once', () => {
-  const a = { center: C, radius: 200 }, b = { center: P(300), radius: 200 };
+  const a = circle(C, 200), b = circle(P(300), 200);
   // Across both: one piece from -200 to 500, since they overlap from 100 to 200.
-  const r = clipToCircles([P(-500), P(800)], [a, b]);
+  const r = clipToShapes([P(-500), P(800)], [a, b]);
   assert.equal(r.lines.length, 1);
   assert.ok(Math.abs(r.length - 700) < 0.01, String(r.length));
   // Apart: two pieces.
-  const apart = clipToCircles([P(-500), P(1500)], [a, { center: P(1000), radius: 200 }]);
+  const apart = clipToShapes([P(-500), P(1500)], [a, circle(P(1000), 200)]);
   assert.equal(apart.lines.length, 2);
   assert.ok(Math.abs(apart.length - 800) < 0.01);
-  // One circle gives the same as clipToCircle.
-  assert.deepEqual(clipToCircles([P(-500), P(500)], [a]), clipToCircle([P(-500), P(500)], C, 200));
+});
+
+test('a line is cut at the sides of a rectangle', () => {
+  const box = rectFrom(P(-200, -100), P(200, 100));
+  // Straight across: 400 m, cut at x = ±200.
+  const across = clipToShapes([P(-500), P(500)], [box]);
+  assert.equal(across.lines.length, 1);
+  near(across.length, 400);
+  near(across.lines[0]![0]![0] * M_PER_DEG, -200);
+  near(across.lines[0]!.at(-1)![0] * M_PER_DEG, 200);
+  // Corner to corner through it, on a slant.
+  near(clipToShapes([P(-300, -150), P(300, 150)], [box]).length, Math.hypot(400, 200), 1);
+  // In and out again through the top: two pieces.
+  const zig = clipToShapes([P(-150), P(-150, 300), P(150, 300), P(150)], [box]);
+  assert.equal(zig.lines.length, 2);
+  near(zig.length, 200);
+  // Passes by above it.
+  assert.equal(clipToShapes([P(-500, 150), P(500, 150)], [box]).lines.length, 0);
+  // A circle and a rectangle that overlap count the shared part once: -200 to 500.
+  near(clipToShapes([P(-500), P(800)], [box, circle(P(300), 200)]).length, 700, 0.01);
+});
+
+test('a rectangle touches every tile in its box', () => {
+  const c: [number, number] = [-0.47, 39.7];
+  const big = tilesFor(rectFrom([c[0] - 0.05, c[1] - 0.03], [c[0] + 0.05, c[1] + 0.03]));
+  const ks = big.map(tileXY);
+  const xs = new Set(ks.map((k) => k[0])), ys = new Set(ks.map((k) => k[1]));
+  assert.equal(big.length, xs.size * ys.size, 'a full grid');
+  assert.deepEqual(big, [...big].sort((a, b) => a - b));
+  // A circle that fits inside the box touches fewer tiles.
+  const round = tilesFor(circle(c, 2500));
+  assert.ok(round.every((k) => big.includes(k)) && round.length < big.length);
 });

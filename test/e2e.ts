@@ -243,7 +243,7 @@ await w.getByLabel('My rides line width').dblclick();
 await waitFor(() => JSON.parse(readFileSync(cfgFile('layers.json'), 'utf8')).layers.find((l: any) => l.id === 'heatmap')?.width === undefined, 'ride width reset');
 await w.waitForFunction((n) => JSON.stringify((window as any).__map.getPaintProperty('heat', 'line-width')) === n, normal);
 
-// Roads and trails: circles are saved in areas.json, their data is downloaded once
+// Roads and trails: circles and rectangles are saved in areas.json, their data is downloaded once
 // and shared, and each can be named, hidden, filtered and deleted.
 const areasFile = () => JSON.parse(readFileSync(cfgFile('areas.json'), 'utf8')).areas as any[];
 const areaRow = (i: number) => w.locator('.areas > li').nth(i);
@@ -258,7 +258,7 @@ const draw = async (r: number) => {
   await w.mouse.click(cx, cy);
   await w.mouse.move(cx + r / 2, cy, { steps: 3 });
   await w.mouse.move(cx + r, cy, { steps: 3 });
-  await w.getByText(/Radius \d+ m\. Click again/).waitFor();
+  await w.getByText(/\d+ m radius\. Click again/).waitFor();
   await w.mouse.click(cx + r, cy);
 };
 await draw(120);
@@ -278,7 +278,7 @@ await shot('15-roads');
 const order = await w.evaluate(() => (window as any).__map.getStyle().layers.map((l: any) => l.id));
 assert.ok(order.indexOf('roads-line') < order.indexOf('heat-outline'), 'roads under rides');
 assert.ok(await w.evaluate(() => !!(window as any).__map.getPaintProperty('roads-line', 'line-dasharray')), 'roads dashed');
-// One Roads and trails layer sets opacity and width for every circle, and is saved.
+// One Roads and trails layer sets opacity and width for every area, and is saved.
 const roadPaint = (p: string) => w.evaluate((p) => JSON.stringify((window as any).__map.getPaintProperty('roads-line', p)), p);
 const roadWidth = await roadPaint('line-width');
 await w.getByLabel('Roads and trails line width').fill('2.5');
@@ -329,12 +329,12 @@ await w.getByRole('button', { name: /Ridge trail/ }).waitFor();
 assert.equal(overpass.calls, calls);
 await w.getByRole('button', { name: 'Close the list' }).click();
 
-// Circle outlines are solid black unless set otherwise.
+// Area outlines are solid black unless set otherwise.
 const edgePaint = (p: string) => w.evaluate((p) => JSON.stringify((window as any).__map.getPaintProperty('roads-area-line', p) ?? null), p);
 assert.equal(await edgePaint('line-color'), '"#000000"');
 assert.equal(await edgePaint('line-dasharray'), 'null');
 
-// Groups: circles that cover one place go under one name, separate or joined into one area.
+// Groups: shapes that cover one place go under one name, separate or joined into one area.
 const groupsFile = () => JSON.parse(readFileSync(cfgFile('areas.json'), 'utf8')).groups as any[] | undefined;
 await areaRow(0).getByLabel('Group').selectOption('+');
 await w.getByLabel('New group name').fill('Ridge');
@@ -343,19 +343,30 @@ await waitFor(() => groupsFile()?.length === 1 && areasFile()[0].group === group
 assert.match(groupsFile()![0].id, /^g-[a-z0-9]{6}$/);
 assert.equal(groupsFile()![0].joined, false);
 const groupRow = w.locator('.areas > li[data-group]');
-await groupRow.getByText('1 circle', { exact: true }).waitFor();
+await groupRow.getByText('1 shape', { exact: true }).waitFor();
 await groupRow.getByRole('button', { name: 'Details of Ridge' }).click();
-await groupRow.getByRole('button', { name: 'Draw a circle in this group' }).click();
+// Back to where the circle was drawn: picking a road zoomed in.
+await w.evaluate(([x, y]) => (window as any).__map.jumpTo({ center: [x, y], zoom: 14 }), MID);
+await w.waitForTimeout(500);
+await groupRow.getByRole('button', { name: 'Draw a rectangle in this group' }).click();
+await w.getByText('Click one corner of the area').waitFor();
 await w.getByText('It goes in Ridge.').waitFor();
-// Partly over the first, so joined they have one outline around both.
-await w.mouse.click(cx + 160, cy + 40);
-await w.mouse.move(cx + 210, cy + 40, { steps: 3 });
-await w.mouse.move(cx + 260, cy + 40, { steps: 3 });
-await w.mouse.click(cx + 260, cy + 40);
-await waitFor(() => areasFile().length === 2 && areasFile()[1].group === groupsFile()![0].id, 'circle drawn in the group');
-await groupRow.getByText('2 circles', { exact: true }).waitFor();
-assert.equal(await groupRow.locator('.group-areas > li').count(), 2, 'separate: both circles listed under the group');
-// Separate, each circle has its own edge.
+// A rectangle partly over the circle, so joined they have one outline around both.
+// The group's circle is the second one, 50 px across from the centre: start inside it.
+await w.mouse.click(cx + 20, cy - 30);
+await w.mouse.move(cx + 110, cy + 10, { steps: 3 });
+await w.mouse.move(cx + 200, cy + 50, { steps: 3 });
+await w.getByText(/\d+ m × \d+ m\. Click the opposite corner/).waitFor();
+await w.mouse.click(cx + 200, cy + 50);
+await waitFor(() => areasFile().length === 2 && areasFile()[1].group === groupsFile()![0].id, 'rectangle drawn in the group');
+const rect = areasFile()[1];
+console.log("rectangle", JSON.stringify(rect));
+assert.ok(Array.isArray(rect.box) && rect.box.length === 4 && rect.center === undefined && rect.radius === undefined);
+assert.ok(rect.box[0] < rect.box[2] && rect.box[1] < rect.box[3], 'west, south, east, north');
+await groupRow.getByText('2 shapes', { exact: true }).waitFor();
+await groupRow.locator('.group-areas > li').nth(1).getByText(/\d+ m × \d+ m/).waitFor();
+assert.equal(await groupRow.locator('.group-areas > li').count(), 2, 'separate: both shapes listed under the group');
+// Separate, each shape has its own edge.
 await w.waitForFunction(() => (window as any).__map.getStyle().sources['roads-area-edge']?.data?.features?.length === 2);
 await groupRow.getByLabel('Join into one area').check();
 await waitFor(() => groupsFile()![0].joined === true, 'group joined');
@@ -365,7 +376,7 @@ await groupRow.getByText(/m trails · .* m tracks/).waitFor({ timeout: 20000 });
 await w.waitForFunction(() => (window as any).__map.getStyle().sources['roads-area-edge']?.data?.features?.length === 1);
 await groupRow.getByRole('button', { name: 'List roads and trails' }).click();
 await w.locator('.roads header').getByText('Ridge').waitFor();
-await w.locator('.roads header').getByText('2 circles, joined').waitFor();
+await w.locator('.roads header').getByText('2 shapes, joined').waitFor();
 await w.getByRole('button', { name: /Ridge trail/ }).click();
 await w.waitForFunction(() => !!(window as any).__map.getLayer('roads-selected'));
 await w.waitForTimeout(600); await idle();
@@ -379,9 +390,9 @@ await shot('16a-group-separate');
 await groupRow.getByLabel('Join into one area').check();
 await waitFor(() => groupsFile()![0].joined === true, 'group joined again');
 await groupRow.getByRole('button', { name: 'List roads and trails' }).click();
-await w.locator('.roads header').getByText('2 circles, joined').waitFor();
+await w.locator('.roads header').getByText('2 shapes, joined').waitFor();
 await w.getByRole('button', { name: 'Close the list' }).click();
-// The group's checkbox turns all its circles off and on.
+// The group's checkbox turns all its shapes off and on.
 await groupRow.getByRole('checkbox').first().uncheck();
 await waitFor(() => areasFile().every((a) => a.on === false), 'group off');
 await groupRow.getByRole('checkbox').first().check();
@@ -389,32 +400,39 @@ await waitFor(() => areasFile().every((a) => a.on === true), 'group on');
 
 // The outline is set in Customize, and saved in map.json.
 await w.getByRole('button', { name: 'Customize' }).click();
-const circlesSection = w.locator('section', { hasText: 'Roads and trails circles' });
-await circlesSection.getByLabel('Outline colour', { exact: true }).fill('#ff0000');
-await circlesSection.getByLabel('Thickness (px)').fill('4');
-await circlesSection.locator('select').selectOption('dotted');
-await circlesSection.getByRole('button', { name: 'Save' }).click();
+const outlineSection = w.locator('section', { hasText: 'Roads and trails outline' });
+await outlineSection.getByLabel('Outline colour', { exact: true }).fill('#ff0000');
+await outlineSection.getByLabel('Thickness (px)').fill('4');
+await outlineSection.locator('select').selectOption('dotted');
+await outlineSection.getByRole('button', { name: 'Save' }).click();
 const mapFile = () => JSON.parse(readFileSync(cfgFile('map.json'), 'utf8'));
-await waitFor(() => mapFile().circles?.style === 'dotted', 'outline saved');
-assert.deepEqual(mapFile().circles, { color: '#ff0000', width: 4, style: 'dotted' });
-await shot('16c-customize-circles');
+await waitFor(() => mapFile().outline?.style === 'dotted', 'outline saved');
+assert.deepEqual(mapFile().outline, { color: '#ff0000', width: 4, style: 'dotted' });
+await shot('16c-customize-outline');
 await w.getByRole('button', { name: 'Map', exact: true }).click();
 await w.waitForFunction(() => JSON.stringify((window as any).__map.getPaintProperty('roads-area-line', 'line-dasharray')) === '[0,2]');
 assert.equal(await edgePaint('line-color'), '"#ff0000"');
 await w.waitForTimeout(600); await idle();
 await shot('16d-dotted-outline');
 
-// Ungroup keeps the circles; then the extra one goes.
+// Ungroup keeps the shapes; then the rectangle goes.
 await groupRow.getByRole('button', { name: 'Ungroup' }).click();
 await waitFor(() => groupsFile() === undefined && areasFile().every((a) => a.group === undefined), 'ungrouped');
 await areaRow(1).getByRole('button', { name: /^Delete/ }).click();
 await w.getByRole('button', { name: 'Delete', exact: true }).click();
-await waitFor(() => areasFile().length === 1, 'extra circle deleted');
+await waitFor(() => areasFile().length === 1, 'rectangle deleted');
 
-// Escape stops drawing.
+// Escape stops drawing, part way through too.
 await w.getByRole('button', { name: 'Draw a circle' }).click();
 await w.keyboard.press('Escape');
 await w.getByText('Click the centre of the area').waitFor({ state: 'detached' });
+await w.getByRole('button', { name: 'Draw a rectangle' }).click();
+await w.mouse.click(cx - 100, cy - 100);
+await w.mouse.move(cx - 50, cy - 50, { steps: 3 });
+await w.getByText(/Click the opposite corner/).waitFor();
+await w.keyboard.press('Escape');
+await w.getByText(/Click the opposite corner/).waitFor({ state: 'detached' });
+assert.equal(areasFile().length, 1, 'nothing saved');
 await w.evaluate(() => (window as any).__map.jumpTo({ center: [0, 30], zoom: 1.5 }));
 await w.waitForTimeout(600);
 
@@ -430,6 +448,7 @@ for (const p of ['trail://app/%2e%2e/main/main.cjs', 'trail://maps/..%2f..%2fkey
 
 // Reopen: no key prompt, same layers and position, no repeat downloads
 const n = f.downloads.length;
+const callsBefore = overpass.calls;
 await app.close();
 const t0 = Date.now();
 app = await launch(); w = await app.firstWindow(); watch();
@@ -442,7 +461,7 @@ await w.waitForTimeout(1500);
 assert.equal(f.downloads.length, n);
 // The area and its roads are still there, without downloading again.
 await areaRow(0).getByText(/trails/).waitFor();
-assert.equal(overpass.calls, calls);
+assert.equal(overpass.calls, callsBefore);
 
 // Key stops working: map stays
 f.opts.rejectKey = true;

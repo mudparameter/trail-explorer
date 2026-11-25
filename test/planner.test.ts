@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildNetwork, coverage, networkGeoJson, RideIndex, type Circle } from '../src/core/network.ts';
+import { buildNetwork, coverage, networkGeoJson, RideIndex } from '../src/core/network.ts';
+import { insideShape, rectFrom, type Shape } from '../src/core/shapes.ts';
 import { favoriteEdges, Planner, type PlanRequest } from '../src/core/planner.ts';
 import { describe, elevated, gpxLine, km, height, rate, routeGpx, statsOfLine, steepestDescents } from '../src/core/route.ts';
 import type { OsmWay } from '../src/core/roads.ts';
@@ -25,10 +26,22 @@ function grid(n = 21, gap = 200): OsmWay[] {
   }
   return ways;
 }
-const circle: Circle = { center: C, radius: 1900 };
+const circle: Shape = { kind: 'circle', center: C, radius: 1900 };
 /** Rides along the western half of every row. */
 const rides = Array.from({ length: 21 }, (_, j) => Float64Array.from([P(-2000, j * 200 - 2000), P(0, j * 200 - 2000)].flat()));
 const req = (more: Partial<PlanRequest> = {}): PlanRequest => ({ start: P(-30, 20), finish: null, distance: 8000, climb: null, newTrail: 'some', kinds: ['trail', 'track', 'cycleway', 'road'], allowRestricted: false, ...more });
+
+test('a rectangle keeps the part of the network inside its box', () => {
+  // Grid lines every 200 m: 11 columns from -1000 to 1000 and 5 rows from -400 to 400 are inside.
+  const box = rectFrom(P(-1000, -500), P(1000, 500));
+  const net = buildNetwork(grid(), [box]);
+  assert.equal(net.nodes.length, 55);
+  assert.equal(net.edges.length, 5 * 10 + 11 * 4);
+  assert.ok(net.nodes.every((p) => insideShape(box, p.lon, p.lat)));
+  // With a circle too, the network is both, joined where they overlap.
+  const both = buildNetwork(grid(), [box, { kind: 'circle', center: P(1600, 0), radius: 500 }]);
+  assert.ok(both.edges.length > net.edges.length);
+});
 
 test('the network splits ways at junctions, keeps only what is inside the areas, and knows what is ridden', () => {
   const idx = new RideIndex(rides, [-1, 38, 1, 41]);

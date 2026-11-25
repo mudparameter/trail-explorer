@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { AreaView, Bounds, GroupView, MapInfo, PlanNetwork, PlanProgress } from '../core/api.ts';
 import { bandLabels, type Config } from '../core/config.ts';
-import { insideAny } from '../core/network.ts';
+import { insideAny } from '../core/shapes.ts';
 import type { Level, NewTrail, PlanRequest } from '../core/planner.ts';
 import { height, km, type PlannedRoute } from '../core/route.ts';
 import { distance, KINDS, type RoadKind } from '../core/roads.ts';
@@ -10,7 +10,7 @@ import type { Bundled } from './mapstyle.ts';
 import { PlanMap } from './PlanMap.tsx';
 import { planStyle, ROUTE_COLORS, RIDDEN_COLOR, RIDDEN_DARK, START_COLOR, FINISH_COLOR, type RiddenLook } from './planstyle.ts';
 import { pointAt, Profile } from './Profile.tsx';
-import { areaName } from './Roads.tsx';
+import { areaName, sizeLabel } from './Roads.tsx';
 
 type Step = 1 | 2 | 3 | 4;
 const NEW_TRAIL: { id: NewTrail; label: string; note: string }[] = [
@@ -83,11 +83,11 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
   }, []);
 
   const usable = areas.filter((a) => a.state === 'ready');
-  const circles = useMemo(() => areas.filter((a) => chosen.has(a.id)).map((a) => ({ center: a.center, radius: a.radius })), [areas, chosen]);
+  const shapes = useMemo(() => areas.filter((a) => chosen.has(a.id)).map((a) => a.shape), [areas, chosen]);
   const sel = routes.find((r) => r.id === selected) ?? null;
   const style = useMemo(
-    () => planStyle({ config, maps, bundled, baseMap, ridden, circles, network: net?.geojson ?? null, routes, selected, start, finish: loop ? null : finish }),
-    [config, maps, bundled, baseMap, ridden, circles, net, routes, selected, start, finish, loop],
+    () => planStyle({ config, maps, bundled, baseMap, ridden, shapes, network: net?.geojson ?? null, routes, selected, start, finish: loop ? null : finish }),
+    [config, maps, bundled, baseMap, ridden, shapes, net, routes, selected, start, finish, loop],
   );
 
   const prepare = async () => {
@@ -103,14 +103,14 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     setNet(r.value);
     setFit(r.value.bounds);
     setStep(2);
-    if (!start || !insideAny(circles, start[0], start[1])) {
+    if (!start || !insideAny(shapes, start[0], start[1])) {
       setStart(null);
       setFinish(null);
       setClicking('start');
     }
   };
   const clicked = (at: [number, number]) => {
-    if (!insideAny(circles, at[0], at[1])) return setError('That is outside the chosen areas. Click inside a circle.');
+    if (!insideAny(shapes, at[0], at[1])) return setError('That is outside the chosen areas. Click inside one.');
     setError(null);
     if (clicking === 'start') {
       setStart(at);
@@ -198,8 +198,8 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
             {head(1, 'Areas', `${chosen.size} area${chosen.size === 1 ? '' : 's'}${net ? ` · ${distance(net.total)} of paths, ${pct(net.ridden / (net.total || 1))} ridden` : ''}`)}
             {step === 1 && (
               <>
-                <p className="small">Choose the circles to plan in. Routes stay inside them.</p>
-                {areas.length === 0 && <p className="small">Draw circles on the main map first, under Roads and trails.</p>}
+                <p className="small">Choose the areas to plan in. Routes stay inside them.</p>
+                {areas.length === 0 && <p className="small">Draw circles or rectangles on the main map first, under Roads and trails.</p>}
                 <ul className="choose">
                   {areas.flatMap((a) => {
                     const g = groups.find((x) => x.id === a.group);
@@ -212,20 +212,20 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                       <li key={x.id}>
                         <label>
                           <input type="checkbox" disabled={x.state !== 'ready'} checked={chosen.has(x.id)} onChange={(e) => choose([x.id], e.target.checked)} />
-                          {' '}{areaName(x)} <span className="small">{distance(x.radius)}{x.state !== 'ready' ? ' · still downloading' : ''}</span>
+                          {' '}{areaName(x)} <span className="small">{sizeLabel(x.shape)}{x.state !== 'ready' ? ' · still downloading' : ''}</span>
                         </label>
                       </li>
                     );
                     if (!g) return [row(a)];
                     if (g.members[0] !== a.id) return [];
-                    // A group is chosen whole: its circles that are ready.
+                    // A group is chosen whole: its areas that are ready.
                     const ms = areas.filter((m) => m.group === g.id);
                     const ready = ms.filter((m) => m.state === 'ready').map((m) => m.id);
                     return [
                       <li key={g.id}>
                         <label>
                           <input type="checkbox" disabled={!ready.length} checked={ready.length > 0 && ready.every((id) => chosen.has(id))} onChange={(e) => choose(ready, e.target.checked)} />
-                          {' '}{g.name} <span className="small">{ms.length} circle{ms.length === 1 ? '' : 's'}{ready.length < ms.length ? ' · still downloading' : ''}</span>
+                          {' '}{g.name} <span className="small">{ms.length} shape{ms.length === 1 ? '' : 's'}{ready.length < ms.length ? ' · still downloading' : ''}</span>
                         </label>
                         {!g.joined && <ul className="choose nested">{ms.map(row)}</ul>}
                       </li>,

@@ -2,9 +2,7 @@ import { AttributionControl, Map as GLMap, NavigationControl, ScaleControl, setW
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef } from 'react';
 import type { Bounds, View } from '../core/api.ts';
-import { MAX_AREA } from '../core/roads.ts';
-import { metres } from '../core/track.ts';
-import { circleRing } from '../core/zones.ts';
+import { drawnShape, shapeRing, type Shape } from '../core/shapes.ts';
 import { DRAW, ROAD_LINES } from './mapstyle.ts';
 
 setWorkerUrl(new URL(workerUrl, location.href).href);
@@ -20,11 +18,12 @@ interface Props {
   /** Clicks place something, such as a zone, instead of moving the map. */
   placing: boolean;
   onPlace(at: [number, number]): void;
-  /** Clicks draw a circle: one for the centre, one for the edge. */
+  /** Clicks draw a shape: a circle's centre then its edge, or a rectangle's two opposite corners. */
   drawing: boolean;
-  onDrawn(center: [number, number], radius: number): void;
-  /** The radius while drawing, or null before the centre is placed. */
-  onDrawRadius(r: number | null): void;
+  drawShape: Shape['kind'];
+  onDrawn(shape: Shape): void;
+  /** The shape so far while drawing, or null before the first click. */
+  onDrawShape(s: Shape | null): void;
   /** A found road was clicked, or the map away from them. */
   onPickRoad(key: string | null): void;
   goTo: { bounds: Bounds | View; n: number } | null;
@@ -40,8 +39,8 @@ export function MapView(props: Props) {
   const map = useRef<GLMap | null>(null);
   const cb = useRef(props);
   cb.current = props;
-  /** The centre of the circle being drawn. */
-  const center = useRef<[number, number] | null>(null);
+  /** The first click of the shape being drawn. */
+  const start = useRef<[number, number] | null>(null);
 
   useEffect(() => {
     const m = new GLMap({
@@ -62,19 +61,18 @@ export function MapView(props: Props) {
       console.error('Map error:', e.error?.message);
       if (!navigator.onLine) cb.current.onTileError('No internet. Default maps need it. Your rides and custom maps still work.');
     });
-    const radiusTo = (lon: number, lat: number) => Math.min(MAX_AREA, metres(center.current![0], center.current![1], lon, lat));
+    const shapeTo = (at: [number, number]) => drawnShape(cb.current.drawShape, start.current!, at);
     m.on('click', (e) => {
       const at = e.lngLat.toArray() as [number, number];
       if (cb.current.placing) cb.current.onPlace(at);
       else if (cb.current.drawing) {
-        if (!center.current) {
-          center.current = at;
-          cb.current.onDrawRadius(0);
+        if (!start.current) {
+          start.current = at;
+          cb.current.onDrawShape(shapeTo(at));
         } else {
-          const c = center.current;
-          const r = radiusTo(at[0], at[1]);
-          center.current = null;
-          cb.current.onDrawn(c, r);
+          const s = shapeTo(at);
+          start.current = null;
+          cb.current.onDrawn(s);
         }
       } else if (m.getLayer(ROAD_LINES)) {
         const p = e.point;
@@ -83,11 +81,11 @@ export function MapView(props: Props) {
       }
     });
     m.on('mousemove', (e) => {
-      if (!cb.current.drawing || !center.current) return;
-      const r = radiusTo(e.lngLat.lng, e.lngLat.lat);
+      if (!cb.current.drawing || !start.current) return;
+      const s = shapeTo(e.lngLat.toArray() as [number, number]);
       const src = m.getSource(DRAW) as GeoJSONSource | undefined;
-      src?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circleRing(center.current, Math.max(r, 1))] } });
-      cb.current.onDrawRadius(r);
+      src?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [shapeRing(s.kind === 'circle' ? { ...s, radius: Math.max(s.radius, 1) } : s)] } });
+      cb.current.onDrawShape(s);
     });
     m.on('mouseenter', ROAD_LINES, () => {
       if (!cb.current.placing && !cb.current.drawing) m.getCanvas().style.cursor = 'pointer';
@@ -121,7 +119,7 @@ export function MapView(props: Props) {
     // Two clicks to draw would otherwise zoom in.
     if (drawing) m.doubleClickZoom.disable();
     else m.doubleClickZoom.enable();
-    if (!drawing) center.current = null;
+    if (!drawing) start.current = null;
   }, [placing, drawing]);
   useEffect(() => {
     if (!goTo || !map.current) return;

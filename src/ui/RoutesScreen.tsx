@@ -135,7 +135,7 @@ function RouteView({ id, config, maps, bundled, close }: { id: string; config: C
   }, [id]);
   const style = useMemo(
     () => planStyle({
-      config, maps, bundled, baseMap: true, circles: [], network: null, routes: d ? [{ id, line: d.line }] : [], selected: id,
+      config, maps, bundled, baseMap: true, shapes: [], network: null, routes: d ? [{ id, line: d.line }] : [], selected: id,
       start: d?.line[0] ? [d.line[0][0], d.line[0][1]] : null, finish: d && !d.route.loop ? [d.line[d.line.length - 1]![0], d.line[d.line.length - 1]![1]] : null,
     }),
     [config, maps, bundled, d, id],

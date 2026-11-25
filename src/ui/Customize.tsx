@@ -2,7 +2,7 @@
 // way the app does when it reads them, so what is saved always loads.
 import { useState, type ReactNode } from 'react';
 import type { ConfigFile, ConfigState, View } from '../core/api.ts';
-import { bandLabels, checkFile, DEFAULTS, LINE_STYLES, MAX_LINE, MIN_LINE, newMapIndex, type Band, type CircleLine, type HeatmapConfig, type LayerDef, type LineStyle, type MapConfig } from '../core/config.ts';
+import { bandLabels, checkFile, DEFAULTS, LINE_STYLES, MAX_LINE, MIN_LINE, newMapIndex, type Band, type AreaLine, type HeatmapConfig, type LayerDef, type LineStyle, type MapConfig } from '../core/config.ts';
 import { trail } from './api.ts';
 
 interface Props {
@@ -26,7 +26,7 @@ export function Customize({ cfg, view, showOnMap }: Props) {
       <MapSection key={JSON.stringify(config.map)} value={config.map} view={view} showOnMap={showOnMap} />
       <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />
       <LayersSection key={JSON.stringify(config.layers)} value={config.layers} cfg={cfg} />
-      <CirclesSection key={`circles ${JSON.stringify(config.map)}`} value={config.map} />
+      <OutlineSection key={`outline ${JSON.stringify(config.map)}`} value={config.map} />
       <h2>Excluded zones</h2>
       <p>
         Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
@@ -167,7 +167,7 @@ function MapSection({ value, view, showOnMap }: { value: MapConfig; view: View |
                 set({ ...d, overpass: lines.filter((l, i) => l.trim() || i === lines.length - 1).map((l) => l.trim()) });
               }}
             />
-            <span className="small">Overpass API addresses, one per line, tried in order when one is busy. The circle you search is sent to them.</span>
+            <span className="small">Overpass API addresses, one per line, tried in order when one is busy. The area you search is sent to them.</span>
           </label>
         </div>
       )}
@@ -177,34 +177,34 @@ function MapSection({ value, view, showOnMap }: { value: MapConfig; view: View |
 
 const STYLE_NAMES: Record<LineStyle, string> = { solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted' };
 
-/** How drawn circles look. Kept in map.json with the rest of the map's look. */
-function CirclesSection({ value }: { value: MapConfig }) {
+/** How drawn areas look. Kept in map.json with the rest of the map's look. */
+function OutlineSection({ value }: { value: MapConfig }) {
   return (
-    <Section title="Roads and trails circles" file="map.json" value={value} defaults={{ ...value, circles: DEFAULTS.map.circles }} toFile={(v) => v}
+    <Section title="Roads and trails outline" file="map.json" value={value} defaults={{ ...value, outline: DEFAULTS.map.outline }} toFile={(v) => v}
       intro={
         <p className="small">
-          How the edge of the circles drawn under Roads and trails looks, on the map and in the route planner. The circles themselves,
-          and their groups, are kept in <code>areas.json</code>, one per line. The road data they download is kept by the app, shared
-          between overlapping circles, and not in this folder.
+          How the edge of the circles and rectangles drawn under Roads and trails looks, on the map and in the route planner. The shapes
+          themselves, and their groups, are kept in <code>areas.json</code>, one per line. The road data they download is kept by the app,
+          shared between overlapping areas, and not in this folder.
         </p>
       }>
       {(d, set) => {
-        const c = (x: Partial<CircleLine>) => set({ ...d, circles: { ...d.circles, ...x } });
+        const c = (x: Partial<AreaLine>) => set({ ...d, outline: { ...d.outline, ...x } });
         return (
           <div className="form">
             <div className="fields">
-              <Colour label="Outline colour" value={d.circles.color} set={(x) => c({ color: x })} />
-              <Num label="Thickness (px)" value={d.circles.width} min={MIN_LINE} max={MAX_LINE} step={0.5} set={(x) => c({ width: x })} />
+              <Colour label="Outline colour" value={d.outline.color} set={(x) => c({ color: x })} />
+              <Num label="Thickness (px)" value={d.outline.width} min={MIN_LINE} max={MAX_LINE} step={0.5} set={(x) => c({ width: x })} />
               <label>
                 Line
-                <select value={d.circles.style} onChange={(e) => c({ style: e.target.value as LineStyle })}>
+                <select value={d.outline.style} onChange={(e) => c({ style: e.target.value as LineStyle })}>
                   {LINE_STYLES.map((x) => <option key={x} value={x}>{STYLE_NAMES[x]}</option>)}
                 </select>
               </label>
             </div>
             <div>
               <strong>Preview</strong>
-              <CirclePreview line={d.circles} />
+              <OutlinePreview line={d.outline} />
             </div>
           </div>
         );
@@ -213,16 +213,16 @@ function CirclesSection({ value }: { value: MapConfig }) {
   );
 }
 
-/** Two overlapping circles, drawn as the map would. */
-function CirclePreview({ line }: { line: CircleLine }) {
+/** A circle and a rectangle, drawn as the map would. */
+function OutlinePreview({ line }: { line: AreaLine }) {
   const w = Number.isFinite(line.width) ? Math.min(Math.max(line.width, MIN_LINE), MAX_LINE) : 2;
   const colour = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(line.color) ? line.color : '#000000';
   const dash = line.style === 'dashed' ? `${w * 3} ${w * 2}` : line.style === 'dotted' ? `0 ${w * 2}` : undefined;
   return (
-    <svg className="circle-preview" width="220" height="110" viewBox="0 0 220 110" role="img" aria-label="Preview of the circle outline">
+    <svg className="outline-preview" width="220" height="110" viewBox="0 0 220 110" role="img" aria-label="Preview of the outline">
       <rect width="220" height="110" fill="#eeeeee" />
-      <circle cx="80" cy="55" r="40" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} />
-      <circle cx="145" cy="55" r="35" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} />
+      <circle cx="70" cy="55" r="40" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} />
+      <rect x="125" y="20" width="75" height="70" fill={colour} fillOpacity={0.05} stroke={colour} strokeWidth={w} strokeDasharray={dash} strokeLinecap={line.style === 'dotted' ? 'round' : 'butt'} strokeLinejoin="round" />
     </svg>
   );
 }
@@ -291,7 +291,7 @@ function LayersSection({ value, cfg }: { value: LayerDef[]; cfg: ConfigState }) 
           <div className="form">
             {d.map((l, i) => (
               <fieldset key={l.id} className="layer">
-                <legend>{l.name || l.id} <span className="small">{l.type === 'raster' ? 'web map' : l.type === 'file' ? `file ${l.file}` : l.type === 'heatmap' ? 'your rides' : l.type === 'roads' ? 'lines in drawn circles' : 'OpenFreeMap'}</span></legend>
+                <legend>{l.name || l.id} <span className="small">{l.type === 'raster' ? 'web map' : l.type === 'file' ? `file ${l.file}` : l.type === 'heatmap' ? 'your rides' : l.type === 'roads' ? 'lines in drawn areas' : 'OpenFreeMap'}</span></legend>
                 <div className="fields">
                   <label>Name<input value={l.name} maxLength={100} onChange={(e) => layer(i, { name: e.target.value })} /></label>
                   <label>Note<input value={l.note ?? ''} maxLength={100} placeholder="Shown after the name" onChange={(e) => layer(i, { note: e.target.value || undefined })} /></label>

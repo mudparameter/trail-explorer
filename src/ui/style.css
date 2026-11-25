@@ -167,7 +167,7 @@ table.routes .name input { min-width: 160px; }
 .areas .members li { justify-content: space-between; }
 .area-details label.small.check { flex-direction: row; align-items: center; gap: 6px; }
 .choose .nested { margin: 2px 0 0 22px; padding: 0; }
-.circle-preview { display: block; margin-top: 4px; border-radius: 4px; }
+.outline-preview { display: block; margin-top: 4px; border-radius: 4px; }
 .ride .mode { display: flex; flex-direction: row; gap: 16px; padding: 4px 0 2px; font-weight: 600; }
 .ride .mode label { display: flex; flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
 .form.ride .row.distance { flex-wrap: wrap; gap: 4px; }

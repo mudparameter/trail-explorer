@@ -1,19 +1,19 @@
 // Builds one MapLibre style from the config's layers.
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl';
 import type { MapInfo } from '../core/api.ts';
-import { unionEdge, type Circle } from '../core/areas.ts';
-import type { CircleLine, Config } from '../core/config.ts';
+import type { AreaLine, Config } from '../core/config.ts';
 import { KINDS, roadsGeoJson, type Road } from '../core/roads.ts';
-import { circleRing, zonesGeoJson } from '../core/zones.ts';
+import { shapeRing, unionEdge, type Shape } from '../core/shapes.ts';
+import { zonesGeoJson } from '../core/zones.ts';
 
 export const ZONES = 'zones';
 export const ZONE_COLOR = '#d0021b';
-/** The circle being drawn. MapView changes its data as the mouse moves. */
+/** The shape being drawn. MapView changes its data as the mouse moves. */
 export const DRAW = 'draw';
 export const ROAD_LINES = 'roads-line';
 
-/** Paint for the edge of drawn circles, as set in map.json. `ready` is a feature property: unready ones are fainter and finer. */
-export function circleLinePaint(c: CircleLine, ready: unknown = true): any {
+/** Paint for the edge of drawn areas, as set in map.json. `ready` is a feature property: unready ones are fainter and finer. */
+export function outlinePaint(c: AreaLine, ready: unknown = true): any {
   return {
     'line-color': c.color,
     'line-width': ready === true ? c.width : ['case', ready, c.width, c.width * 0.75],
@@ -22,28 +22,28 @@ export function circleLinePaint(c: CircleLine, ready: unknown = true): any {
     ...(c.style === 'dashed' ? { 'line-dasharray': [3, 2] } : c.style === 'dotted' ? { 'line-dasharray': [0, 2] } : {}),
   };
 }
-export const circleLineLayout = (c: CircleLine): any => (c.style === 'dotted' ? { 'line-cap': 'round', 'line-join': 'round' } : { 'line-join': 'round' });
+export const outlineLayout = (c: AreaLine): any => (c.style === 'dotted' ? { 'line-cap': 'round', 'line-join': 'round' } : { 'line-join': 'round' });
 
-/** Drawn circles as map features: a fill for each circle, and one edge around circles that are drawn as one. */
-export function circleFeatures(shapes: { id: string; circles: Circle[]; ready?: boolean }[]) {
+/** Drawn areas as map features: a fill for each shape, and one edge around shapes that are drawn as one. */
+export function areaFeatures(areas: { id: string; shapes: Shape[]; ready?: boolean }[]) {
   return {
     fill: {
       type: 'FeatureCollection' as const,
-      features: shapes.flatMap((a) => a.circles.map((c) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'Polygon' as const, coordinates: [circleRing(c.center, c.radius, 120)] } }))),
+      features: areas.flatMap((a) => a.shapes.map((s) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'Polygon' as const, coordinates: [shapeRing(s)] } }))),
     },
     edge: {
       type: 'FeatureCollection' as const,
-      features: shapes.map((a) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'MultiLineString' as const, coordinates: unionEdge(a.circles) } })),
+      features: areas.map((a) => ({ type: 'Feature' as const, properties: { id: a.id, ready: a.ready ?? true }, geometry: { type: 'MultiLineString' as const, coordinates: unionEdge(a.shapes) } })),
     },
   };
 }
 
 /** Separates an area's id from a road's key in map features. */
 export const KEY_SEP = '|';
-/** An area to draw, with the roads to show in it. A joined group is one area with several circles. */
+/** An area to draw, with the roads to show in it. A joined group is one area with several shapes. */
 export interface StyleArea {
   id: string;
-  circles: Circle[];
+  shapes: Shape[];
   ready: boolean;
   roads: Road[];
 }
@@ -102,7 +102,7 @@ export interface StyleInput {
   heatVersion: number;
   /** Draw the excluded zones on top. Only for the desktop app: on a website they would show where you live. */
   showZones: boolean;
-  /** Clicks are drawing a circle. */
+  /** Clicks are drawing an area. */
   drawing?: boolean;
   areas?: StyleArea[];
   /** The selected road, as area id + KEY_SEP + road key. */
@@ -200,9 +200,9 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       { id: 'zones-line', type: 'line', source: ZONES, paint: { 'line-color': ZONE_COLOR, 'line-width': 2, 'line-dasharray': [2, 1.5] } },
     );
   }
-  const line = config.map.circles;
+  const line = config.map.outline;
   if (areas.length) {
-    const shapes = circleFeatures(areas);
+    const shapes = areaFeatures(areas);
     sources['roads-area'] = { type: 'geojson', data: shapes.fill };
     sources['roads-area-edge'] = { type: 'geojson', data: shapes.edge };
     sources.roads = {
@@ -211,11 +211,11 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       tolerance: 0.2,
       attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
     };
-    // The circles stay on top, even with road lines off or moved down.
+    // The areas' outlines stay on top, even with road lines off or moved down.
     out.push(
       { id: 'roads-area-fill', type: 'fill', source: 'roads-area', paint: { 'fill-color': line.color, 'fill-opacity': ['case', ['get', 'ready'], 0.05, 0.12] } },
       // Areas still downloading have a fainter, finer edge.
-      { id: 'roads-area-line', type: 'line', source: 'roads-area-edge', layout: circleLineLayout(line), paint: circleLinePaint(line, ['get', 'ready']) },
+      { id: 'roads-area-line', type: 'line', source: 'roads-area-edge', layout: outlineLayout(line), paint: outlinePaint(line, ['get', 'ready']) },
     );
     if (selected) {
       const only: any = ['==', ['get', 'key'], selected];
@@ -230,7 +230,7 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     sources[DRAW] = { type: 'geojson', data: { type: 'FeatureCollection', features: [] } };
     out.push(
       { id: 'draw-fill', type: 'fill', source: DRAW, paint: { 'fill-color': line.color, 'fill-opacity': 0.1 } },
-      { id: 'draw-line', type: 'line', source: DRAW, layout: circleLineLayout(line), paint: circleLinePaint(line) },
+      { id: 'draw-line', type: 'line', source: DRAW, layout: outlineLayout(line), paint: outlinePaint(line) },
     );
   }
   return {

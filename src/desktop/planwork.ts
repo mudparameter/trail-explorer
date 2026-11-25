@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FeatureCollection } from 'geojson';
-import { buildNetwork, coverage, networkGeoJson, RideIndex, type Circle, type Network } from '../core/network.ts';
+import { buildNetwork, coverage, networkGeoJson, RideIndex, type Network } from '../core/network.ts';
+import type { Shape } from '../core/shapes.ts';
 import { favoriteEdges, MAGIC, overlap, Planner, type MagicRequest, type Planned, type PlanRequest } from '../core/planner.ts';
 import { describe, elevated, statsOfLine, steepestDescents, type Difficulty, type PlannedRoute } from '../core/route.ts';
 import type { OsmWay } from '../core/roads.ts';
@@ -14,7 +15,7 @@ import { unpackTrack } from '../core/track.ts';
 export interface NetworkJob {
   key: string;
   ways: OsmWay[];
-  circles: Circle[];
+  shapes: Shape[];
   /** Packed tracks of the rides that count as ridden. */
   tracks: Float64Array[];
   bounds: [number, number, number, number];
@@ -51,7 +52,7 @@ function elevation(dir: string) {
 export function network(job: NetworkJob): NetworkResult {
   const lines = job.tracks.flatMap((t) => unpackTrack(t));
   const index = new RideIndex(lines, job.bounds);
-  const net = buildNetwork(job.ways, job.circles, index.ridden, index.passes);
+  const net = buildNetwork(job.ways, job.shapes, index.ridden, index.passes);
   // How steep each path is going down either way, so a limit on descents can leave it out.
   const ele = elevation(job.terrainDir);
   const at = (lon: number, lat: number) => ele.at(lon, lat);

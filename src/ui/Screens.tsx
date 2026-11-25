@@ -102,29 +102,32 @@ export function Help() {
       <p>Under Excluded zones in the sidebar, choose Add zone and click the map. Rides are left out inside the circle. Edit sets its size; Move places it again. Zones are drawn in red on your map only.</p>
       <h2>Find roads and trails in an area</h2>
       <p>
-        Under Roads and trails in the sidebar, choose Draw a circle. Click the centre, move the mouse out, and click again. The circle
-        is kept, and its roads, tracks, cycleways and trails download in the background, so you can draw several while you wait.
+        Under Roads and trails in the sidebar, choose Draw a circle or Draw a rectangle. For a circle, click the centre, move the
+        mouse out, and click again. For a rectangle, click one corner, then the opposite corner. A circle fits round places; a
+        rectangle covers a long valley or a block of map without overlapping several circles. The shape is kept, and its roads,
+        tracks, cycleways and trails download in the background, so you can draw several while you wait.
         Each one can be named, turned off, filtered by kind with ▸, or deleted with ×. Click a name in the list, or a line on the map,
         to show it. Roads and trails are dashed and drawn under your rides, so anything still dashed is somewhere you
-        haven't ridden yet. The Roads and trails layer under Layers sets their opacity and line width for every circle. Circles that overlap share their data, so a circle inside or over another downloads only what is new. Downloading
-        needs the internet and sends each circle's position to an OpenStreetMap data server.
+        haven't ridden yet. The Roads and trails layer under Layers sets their opacity and line width for every area. Areas that overlap share their data, so a shape inside or over another downloads only what is new. Downloading
+        needs the internet and sends each area's position to an OpenStreetMap data server.
       </p>
-      <h2>Group circles that cover one place</h2>
+      <h2>Group shapes that cover one place</h2>
       <p>
-        One place often takes several circles to cover. Open a circle with ▸ and choose Group, then New group, to start one, and pick
-        that group for the other circles. In a group's ▸, Draw a circle in this group adds circles straight to it. Turn on Join into one
-        area to show the group as a single area, with one outline around all its circles and one list of roads and trails that counts
-        overlaps once. Leave it off to keep each circle its own area, listed under the group. The group's checkbox shows or hides all
-        its circles. Ungroup keeps the circles; deleting a group asks whether to delete its circles too.
+        One place often takes several shapes to cover. Open a circle or rectangle with ▸ and choose Group, then New group, to start
+        one, and pick that group for the others. In a group's ▸, Draw a circle in this group and Draw a rectangle in this group add
+        shapes straight to it. Circles and rectangles can share a group. Turn on Join into one area to show the group as a single
+        area, with one outline around all its shapes and one list of roads and trails that counts overlaps once. Leave it off to keep
+        each shape its own area, listed under the group. The group's checkbox shows or hides all its shapes. Ungroup keeps the
+        shapes; deleting a group asks whether to delete its areas too.
       </p>
       <p>
-        The circles' outline is a solid black line unless you change it. Set its colour, thickness and style (solid, dashed or dotted)
-        in Customize, under Roads and trails circles.
+        The outline of circles and rectangles is a solid black line unless you change it. Set its colour, thickness and style (solid,
+        dashed or dotted) in Customize, under Roads and trails outline.
       </p>
       <h2>Plan a route</h2>
       <p>
-        Draw circles first. Then choose Route planner under Roads and trails. It opens a separate mode, with a blue bar on top, in
-        four steps: tick the circles to use, click the map for a start (and a finish, or loop back), set the distance (give or take a tolerance, 5 km unless you change it), climbing,
+        Draw circles or rectangles first. Then choose Route planner under Roads and trails. It opens a separate mode, with a blue bar on top, in
+        four steps: tick the areas to use, click the map for a start (and a finish, or loop back), set the distance (give or take a tolerance, 5 km unless you change it), climbing,
         the steepest climb and descent you want to ride (optional), a difficulty, and how much new trail you want, and pick from three to five routes. Each shows its difficulty and why, distance, climbing and
         descent in metric and imperial, steep parts and an elevation profile. Save the ones you like. Saved routes are under Routes,
         in a table you can sort by clicking a column; there you can rename, view, download as .gpx or delete them.
@@ -139,7 +142,7 @@ export function Help() {
       </p>
       <p>
         Routes are worked out on your computer from the downloaded OpenStreetMap paths, the same way every time. They stay inside the
-        circles. Elevation is from free terrain data with 10 to 30 m detail, so short steep pitches are smoothed and climbing can be
+        chosen areas. Elevation is from free terrain data with 10 to 30 m detail, so short steep pitches are smoothed and climbing can be
         off by 10 to 20%. Paths marked private or no bikes are left out unless you allow them.
       </p>
       <h2>Hide your rides</h2>

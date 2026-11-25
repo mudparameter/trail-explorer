@@ -7,7 +7,7 @@
 //   layers.json     every layer, top first
 //   maps/           offline map files named in layers.json
 //   zones/*.geojson places left out of the heatmap
-//   areas.json      circles to find roads and trails in
+//   areas.json      circles and rectangles to find roads and trails in
 //
 // Every file and every field is optional. A bad value is reported and replaced
 // by its default, so one typo never stops the app.
@@ -35,17 +35,17 @@ interface LayerBase {
 export type LayerDef =
   /** `width` scales how thick ride lines are; left out means 1. */
   | (LayerBase & { type: 'heatmap'; width?: number })
-  /** The roads and trails found in drawn circles, all circles together. */
+  /** The roads and trails found in drawn areas, all areas together. */
   | (LayerBase & { type: 'roads'; width?: number })
   | (LayerBase & { type: 'openfreemap' })
   | (LayerBase & { type: 'raster'; tiles: string[]; tileSize: number; minzoom: number; maxzoom: number; bounds?: Bounds; attribution: string })
   | (LayerBase & { type: 'file'; file: string });
 export type LayerType = LayerDef['type'];
 
-/** How the edge of a drawn circle is drawn. */
+/** How the edge of a drawn area is drawn. */
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export const LINE_STYLES: LineStyle[] = ['solid', 'dashed', 'dotted'];
-export interface CircleLine {
+export interface AreaLine {
   color: string;
   /** Pixels. */
   width: number;
@@ -62,8 +62,8 @@ export interface MapConfig {
   background: string;
   /** Overpass API servers that road and trail searches ask for OpenStreetMap data, tried in order. */
   overpass: string[];
-  /** The edge of the circles drawn under Roads and trails. */
-  circles: CircleLine;
+  /** The edge of the areas drawn under Roads and trails. Older files call it "circles". */
+  outline: AreaLine;
 }
 export interface HeatmapConfig {
   bands: Band[];
@@ -102,7 +102,7 @@ export const FILES = ['map.json', 'heatmap.json', 'layers.json'] as const;
 const OSM = '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
 
 export const DEFAULTS: Config = {
-  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee', overpass: DEFAULT_OVERPASS, circles: { color: '#000000', width: 2, style: 'solid' } },
+  map: { view: null, minZoom: 0, maxZoom: 19, background: '#eeeeee', overpass: DEFAULT_OVERPASS, outline: { color: '#000000', width: 2, style: 'solid' } },
   heatmap: {
     bands: [
       { from: 1, color: '#2f6bff' },
@@ -288,8 +288,8 @@ const within = <T>(label: string, check: (v: unknown) => T) => (v: unknown): T =
 
 function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapConfig {
   const d = DEFAULTS.map;
-  if (!o) return { ...d, circles: { ...d.circles } };
-  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background', 'overpass', 'circles']);
+  if (!o) return { ...d, outline: { ...d.outline } };
+  const f = new Fields('map.json', o, problems, ['view', 'minZoom', 'maxZoom', 'background', 'overpass', 'outline', 'circles']);
   const view = f.get<View | null>('view', d.view, (v) => {
     if (v === null) return null;
     if (!v || typeof v !== 'object' || Array.isArray(v)) return bad('should be { "center": [lon, lat], "zoom": 11 } or null.');
@@ -301,20 +301,22 @@ function readMap(o: Record<string, unknown> | null, problems: Problem[]): MapCon
     f.bad('"maxZoom" is smaller than "minZoom". Using the default instead.');
     maxZoom = Math.max(minZoom, d.maxZoom);
   }
-  let circles = { ...d.circles };
-  const c = o.circles;
+  let outline = { ...d.outline };
+  // "circles" is the name from before areas could be rectangles.
+  const key = o.outline === undefined && o.circles !== undefined ? 'circles' : 'outline';
+  const c = o[key];
   if (c !== undefined) {
-    if (!c || typeof c !== 'object' || Array.isArray(c)) f.bad('"circles" should be { "color": "#000000", "width": 2, "style": "solid" }. Using the default instead.');
+    if (!c || typeof c !== 'object' || Array.isArray(c)) f.bad(`"${key}" should be { "color": "#000000", "width": 2, "style": "solid" }. Using the default instead.`);
     else {
-      const cf = new Fields('map.json', c as Record<string, unknown>, problems, ['color', 'width', 'style'], '"circles": ');
-      circles = {
-        color: cf.get('color', d.circles.color, color),
-        width: cf.get('width', d.circles.width, number(MIN_LINE, MAX_LINE)),
-        style: cf.get('style', d.circles.style, (v) => (LINE_STYLES.includes(v as LineStyle) ? (v as LineStyle) : bad(`should be ${LINE_STYLES.map((x) => `"${x}"`).join(', ')}.`))),
+      const cf = new Fields('map.json', c as Record<string, unknown>, problems, ['color', 'width', 'style'], `"${key}": `);
+      outline = {
+        color: cf.get('color', d.outline.color, color),
+        width: cf.get('width', d.outline.width, number(MIN_LINE, MAX_LINE)),
+        style: cf.get('style', d.outline.style, (v) => (LINE_STYLES.includes(v as LineStyle) ? (v as LineStyle) : bad(`should be ${LINE_STYLES.map((x) => `"${x}"`).join(', ')}.`))),
       };
     }
   }
-  return { view, minZoom, maxZoom, background: f.get('background', d.background, color), overpass: f.get('overpass', d.overpass, servers), circles };
+  return { view, minZoom, maxZoom, background: f.get('background', d.background, color), overpass: f.get('overpass', d.overpass, servers), outline };
 }
 
 function readHeatmap(o: Record<string, unknown> | null, problems: Problem[]): HeatmapConfig {
@@ -484,7 +486,7 @@ export function tileUrlProblem(tiles: unknown): string | null {
 // --- writing --------------------------------------------------------------------
 
 const NOTES: Record<(typeof FILES)[number], string> = {
-  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. "circles" is how drawn circles look. See README.md.',
+  'map.json': 'Where the map opens and how far it zooms. "view": null fits the map to your rides. "overpass" is where road and trail searches go. "outline" is how drawn circles and rectangles look. See README.md.',
   'heatmap.json': 'Colours by number of passes, lowest first. "label" is optional. "hide" leaves kinds of activity out. radius, angle and step change how rides are matched. See README.md.',
   'layers.json': 'Every layer, top first. Types: heatmap, roads, openfreemap, raster (web tiles), file (a map in the maps folder). See README.md.',
 };
