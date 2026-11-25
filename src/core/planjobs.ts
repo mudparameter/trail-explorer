@@ -1,17 +1,16 @@
-// Route planning jobs, run in the worker process. The network for the chosen
-// areas is built once and kept here, so trying different requests is quick.
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// Route planning jobs, run in a worker: a Node process on the desktop, a Web
+// Worker in a browser. The network for the chosen areas is built once and kept
+// here, so trying different requests is quick. No Node, Electron or DOM here.
 import type { FeatureCollection } from 'geojson';
-import { buildNetwork, coverage, networkGeoJson, RideIndex, type Network } from '../core/network.ts';
-import type { Shape } from '../core/shapes.ts';
-import { favoriteEdges, MAGIC, overlap, Planner, type MagicRequest, type Planned, type PlanRequest } from '../core/planner.ts';
-import { describe, elevated, statsOfLine, steepestDescents, type Difficulty, type PlannedRoute } from '../core/route.ts';
-import type { OsmWay } from '../core/roads.ts';
-import { addHeights } from '../core/descent.ts';
-import { decodeTerrarium, Elevation, TERRAIN_ZOOM } from '../core/terrain.ts';
-import { unpackTrack } from '../core/track.ts';
+import { buildNetwork, coverage, networkGeoJson, RideIndex, type Network } from './network.ts';
+import type { Shape } from './shapes.ts';
+import { favoriteEdges, MAGIC, overlap, Planner, type MagicRequest, type Planned, type PlanRequest } from './planner.ts';
+import { describe, elevated, statsOfLine, steepestDescents, type Difficulty, type PlannedRoute } from './route.ts';
+import type { OsmWay } from './roads.ts';
+import { addHeights, DESCENT_DEFAULTS, type DescentWish } from './descent.ts';
+import { KINDS } from './roads.ts';
+import { decodeTerrarium, Elevation, TERRAIN_ZOOM } from './terrain.ts';
+import { unpackTrack } from './track.ts';
 
 export interface NetworkJob {
   key: string;
@@ -20,7 +19,8 @@ export interface NetworkJob {
   /** Packed tracks of the rides that count as ridden. */
   tracks: Float64Array[];
   bounds: [number, number, number, number];
-  terrainDir: string;
+  /** Where the host keeps elevation tiles, passed back to its tile reader. */
+  terrain: string;
 }
 export interface NetworkResult {
   geojson: FeatureCollection;
@@ -28,24 +28,36 @@ export interface NetworkResult {
   ridden: number;
 }
 
-let current: { key: string; net: Network; terrainDir: string } | null = null;
+let current: { key: string; net: Network; terrain: string } | null = null;
+
+/**
+ * How the host reads an elevation tile's PNG, from wherever it keeps them: a
+ * folder on the desktop, IndexedDB in a browser (loaded before the job runs, as
+ * this must answer at once). Null when it has none: there is no elevation there.
+ */
+let readTile: (terrain: string, x: number, y: number) => Uint8Array | null = () => null;
+export function setTileReader(fn: typeof readTile) {
+  readTile = fn;
+  tiles.clear();
+}
 
 /** Decoded elevation tiles, most recent last. About 260 kB each. */
 const tiles = new Map<string, Float32Array | null>();
 const MAX_TILES = 300;
-function elevation(dir: string) {
+function elevation(terrain: string) {
   return new Elevation((x, y) => {
-    const file = join(dir, String(TERRAIN_ZOOM), String(x), `${y}.png`);
-    let t = tiles.get(file);
+    const key = `${terrain}/${TERRAIN_ZOOM}/${x}/${y}`;
+    let t = tiles.get(key);
     if (t === undefined) {
       try {
-        t = decodeTerrarium(readFileSync(file));
+        const png = readTile(terrain, x, y);
+        t = png ? decodeTerrarium(png) : null;
       } catch {
         t = null;
       }
       if (tiles.size >= MAX_TILES) tiles.delete(tiles.keys().next().value!);
-    } else tiles.delete(file);
-    tiles.set(file, t);
+    } else tiles.delete(key);
+    tiles.set(key, t);
     return t;
   });
 }
@@ -55,7 +67,7 @@ export function network(job: NetworkJob): NetworkResult {
   const index = new RideIndex(lines, job.bounds);
   const net = buildNetwork(job.ways, job.shapes, index.ridden, index.passes);
   // How steep each path is going down either way, so a limit on descents can leave it out.
-  const ele = elevation(job.terrainDir);
+  const ele = elevation(job.terrain);
   const at = (lon: number, lat: number) => ele.at(lon, lat);
   for (const e of net.edges) {
     const line: [number, number][] = [];
@@ -64,16 +76,27 @@ export function network(job: NetworkJob): NetworkResult {
   }
   // Heights for finding long descents, when a route asks for one.
   addHeights(net, at);
-  current = { key: job.key, net, terrainDir: job.terrainDir };
+  current = { key: job.key, net, terrain: job.terrain };
   return { geojson: networkGeoJson(net), ...coverage(net) };
 }
 
-const routeId = (p: Planned) => createHash('sha256').update(JSON.stringify(p.steps)).digest('hex').replace(/[^a-z0-9]/g, '').slice(0, 12);
+/** A planned route's id, from its edges: the same route always gets the same one. */
+const routeId = (p: Planned) => hash48(JSON.stringify(p.steps));
+/** 12 hex digits from two 32-bit FNV-1a hashes of a string. */
+function hash48(s: string): string {
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15);
+  }
+  return ((a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0')).slice(0, 12);
+}
 const LEVELS: Difficulty[] = ['Easy', 'Moderate', 'Hard', 'Very hard'];
 
 function ready(key: string) {
   if (!current || current.key !== key) throw new Error('The areas need preparing again. Go back to step 1.');
-  const ele = elevation(current.terrainDir);
+  const ele = elevation(current.terrain);
   const at = (lon: number, lat: number) => ele.at(lon, lat);
   const climbs = new WeakMap<Planned, number>();
   const climbOf = (p: Planned) => {
@@ -208,4 +231,56 @@ export function magic({ key, request, seen = [] }: { key: string; request: Magic
     return (off <= tol ? 0 : 10 + off / Math.max(tol, 1)) + 3 * Math.abs(r.rating.level - want) + Math.abs(perKm - prof.climbPerKm) / prof.climbPerKm + (0.3 * off) / Math.max(tol, 1) + fav;
   };
   return pickDiverse(net, all.map((x) => ({ ...x, s: score(x) })).sort((a, b) => a.s - b.s || (a.r.id < b.r.id ? -1 : 1)));
+}
+
+// --- requests from the window --------------------------------------------------------
+
+/** Asking again: which variant, the routes already shown, and the difficulty wished for. */
+function planMore(o: unknown) {
+  const x = (o ?? {}) as { variant?: unknown; seen?: unknown; difficulty?: unknown };
+  const variant = Number.isInteger(x.variant) && (x.variant as number) >= 0 && (x.variant as number) < 1e6 ? (x.variant as number) : 0;
+  const seen = Array.isArray(x.seen) ? x.seen.filter((s): s is string => typeof s === 'string').slice(0, 500) : [];
+  const difficulty = typeof x.difficulty === 'string' && x.difficulty in MAGIC ? (x.difficulty as Difficulty) : null;
+  return { variant, seen, difficulty };
+}
+/** A long descent asked for, checked; null when not asked for. */
+function descentOf(x: any): DescentWish | null {
+  if (x == null) return null;
+  if (!(typeof x.length === 'number' && x.length >= 500 && x.length <= 100_000)) throw new Error('Choose a descent length from 0.5 to 100 km.');
+  if (!(typeof x.maxClimb === 'number' && x.maxClimb >= 0 && x.maxClimb <= 500)) throw new Error('Choose the most the descent may climb, from 0 to 500 m.');
+  if (!(typeof x.minGrade === 'number' && x.minGrade >= DESCENT_DEFAULTS.minGrade && x.minGrade <= 50)) throw new Error(`Choose the descent's average steepness, from ${DESCENT_DEFAULTS.minGrade} to 50%.`);
+  return { length: x.length, maxClimb: x.maxClimb, minGrade: x.minGrade };
+}
+const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
+
+/** A request for routes from the window, checked, as the planRoutes job takes it. Throws a message for people. */
+export function planRoutesJob(key: unknown, x: unknown, o: unknown): { key: string; request: PlanRequest; seen: string[]; difficulty: Difficulty | null } {
+  const r = x as any;
+  if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
+  if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
+  if (r.climb !== null && !(typeof r.climb === 'number' && r.climb >= 0 && r.climb <= 10_000)) throw new Error('Choose climbing from 0 to 10,000 m, or leave it empty.');
+  if (!['little', 'some', 'lots'].includes(r.newTrail)) throw new Error('Choose how much new trail.');
+  const kinds = Array.isArray(r.kinds) ? r.kinds.filter((k: unknown) => KINDS.some((y) => y.kind === k)) : [];
+  if (!kinds.length) throw new Error('Choose at least one kind of path.');
+  if (r.maxDown != null && !(typeof r.maxDown === 'number' && r.maxDown >= 1 && r.maxDown <= 100)) throw new Error('Choose a steepest descent from 1 to 100%, or leave it empty.');
+  if (r.maxUp != null && !(typeof r.maxUp === 'number' && r.maxUp >= 1 && r.maxUp <= 100)) throw new Error('Choose a steepest climb from 1 to 100%, or leave it empty.');
+  if (r.tolerance != null && !(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
+  const more = planMore(o);
+  const request: PlanRequest = {
+    start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true,
+    maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true, tolerance: r.tolerance ?? null,
+    descent: descentOf(r.descent),
+  };
+  return { key, request, seen: more.seen, difficulty: more.difficulty };
+}
+
+/** A request for magic routes from the window, checked, as the planMagic job takes it. */
+export function planMagicJob(key: unknown, x: unknown, o: unknown): { key: string; request: MagicRequest; seen: string[] } {
+  const r = x as any;
+  if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
+  if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
+  if (!(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
+  if (!(r.difficulty in MAGIC)) throw new Error('Choose a difficulty for magic routes.');
+  const more = planMore(o);
+  return { key, request: { start: r.start, finish: r.finish, distance: r.distance, tolerance: r.tolerance, difficulty: r.difficulty, variant: more.variant, favorites: r.favorites === true, descent: descentOf(r.descent) }, seen: more.seen };
 }

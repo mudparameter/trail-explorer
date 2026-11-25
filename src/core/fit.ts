@@ -28,8 +28,9 @@ export function firstFile(zip: Uint8Array): { name: string; data: Uint8Array } {
 }
 
 export async function readFit(data: Uint8Array): Promise<RideFile> {
-  const buf = Buffer.from(data);
-  const fit: any = await new FitParser({ force: true, mode: 'list' }).parseAsync(buf);
+  // An ArrayBuffer of just these bytes, not Node's Buffer, so this also runs in a browser.
+  const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  const fit: any = await new FitParser({ force: true, mode: 'list' }).parseAsync(bytes);
   const points: Point[] = [];
   for (const r of fit.records ?? []) {
     if (!Number.isFinite(r.position_lat) || !Number.isFinite(r.position_long)) continue;

@@ -3,8 +3,9 @@ import type { MagicRequest, PlanRequest } from './planner.ts';
 import type { Difficulty, PlannedRoute, RouteStats } from './route.ts';
 import type { SavedRoute } from './routes.ts';
 import type { Activity } from './activities.ts';
-// The only interface between the window and the rest of the app.
-// A web version would back this with a server.
+// The only interface between the window and the rest of the app. The desktop
+// app backs it with its main process (desktop/main.ts), the website with the
+// browser's own storage (web/backend.ts).
 import type { Config, FILES, Problem } from './config.ts';
 import type { Area, AreaEdit, AreaGroup, GroupEdit } from './areas.ts';
 import type { Road, RoadKind } from './roads.ts';
@@ -41,7 +42,38 @@ export interface ImportStatus {
   other: number;
   message: string;
 }
+/** What this version of the app can do. The website leaves out what needs a computer or an account. */
+export interface Features {
+  /** Syncing rides from Garmin with a personal API key. */
+  garmin: boolean;
+  /** Rides: importing them, the heatmap, ridden trails and favourites in the planner, and excluded zones. */
+  rides: boolean;
+  /** Map files (.pmtiles, .mbtiles) as layers. */
+  mapFiles: boolean;
+  /** Where the config is kept: a folder on this computer, or this browser's storage. */
+  storage: 'folder' | 'browser';
+}
+/** Config changes not yet saved to a file, where the config lives only in a browser. */
+export interface Backup {
+  /** Changes since the last export. */
+  unsaved: number;
+  /** When the first of them was made. */
+  since: string | null;
+  lastExport: string | null;
+}
+/** What importing a config .zip did. */
+export interface ConfigImport {
+  /** Files written. */
+  files: number;
+  /** Paths in the .zip that are not part of a config, left out. */
+  skipped: string[];
+  /** Problems in the imported files, shown in Customize. */
+  problems: number;
+}
 export interface Status {
+  features: Features;
+  /** Only where the config lives in a browser. */
+  backup?: Backup;
   hasKey: boolean;
   /** A key was saved, but it can no longer be read or Garmin refused it. */
   keyProblem: string | null;
@@ -188,6 +220,10 @@ export interface TrailApi {
   addZone(zone: Required<CircleEdit>): Promise<Result>;
   editZone(id: string, edit: CircleEdit): Promise<Result>;
   removeZone(id: string): Promise<Result>;
+  /** Saves the whole config as one .zip: asks where on the desktop, downloads it on the website. False when cancelled. */
+  exportConfig(): Promise<Result<boolean>>;
+  /** Replaces the config files the .zip holds. Map files already here are kept. */
+  importConfig(zip: Uint8Array): Promise<Result<ConfigImport>>;
   /** Asks for a folder to use as the config folder. False when cancelled. */
   pickConfigDir(): Promise<Result<boolean>>;
   useDefaultConfigDir(): Promise<Result>;

@@ -1,9 +1,20 @@
 // Runs in its own process so the window never freezes.
 import { HeatmapBuilder, toGeoJson } from '../core/heatmap.ts';
 import { readFile, readRide } from '../core/ride.ts';
-import { magic, network, routes } from './planwork.ts';
+import { readFileSync } from 'node:fs';
+import { magic, network, routes, setTileReader } from '../core/planjobs.ts';
+import { terrainFile } from './terrain.ts';
 import { unpackTrack } from '../core/track.ts';
 import { clipTrack, type Zone } from '../core/zones.ts';
+
+// Elevation tiles are files in the data folder; the job says which folder.
+setTileReader((dir, x, y) => {
+  try {
+    return readFileSync(terrainFile(dir, x, y));
+  } catch {
+    return null;
+  }
+});
 
 process.parentPort.on('message', async ({ data }) => {
   const { id, job, payload } = data;

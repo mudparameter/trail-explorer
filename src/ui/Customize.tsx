@@ -1,60 +1,90 @@
 // The configurer: edits the files in the config folder, checking them the same
 // way the app does when it reads them, so what is saved always loads.
-import { useState, type ReactNode } from 'react';
-import type { ConfigFile, ConfigState, View } from '../core/api.ts';
+import { useRef, useState, type ReactNode } from 'react';
+import type { ConfigFile, ConfigState, Status, View } from '../core/api.ts';
 import { bandLabels, checkFile, DEFAULTS, LINE_STYLES, MAX_LINE, MIN_LINE, newMapIndex, type Band, type AreaLine, type HeatmapConfig, type LayerDef, type LineStyle, type MapConfig } from '../core/config.ts';
 import { trail } from './api.ts';
 
 interface Props {
   cfg: ConfigState;
+  status: Status;
   /** Where the map is now. */
   view: View | null;
   showOnMap(v: View): void;
 }
 
-export function Customize({ cfg, view, showOnMap }: Props) {
+export function Customize({ cfg, status, view, showOnMap }: Props) {
   const { config } = cfg;
+  const { rides, storage } = status.features;
   return (
     <main className="page wide">
       <h1>Customize</h1>
-      <p>
-        Everything here is saved as plain files in the config folder, so you can also edit them by hand, keep them in a
-        private git repository, or copy them to another computer. Changes to the files show here as soon as they are saved.
-      </p>
-      <Folder cfg={cfg} />
+      {storage === 'folder' ? (
+        <p>
+          Everything here is saved as plain files in the config folder, so you can also edit them by hand, keep them in a
+          private git repository, or copy them to another computer. Changes to the files show here as soon as they are saved.
+        </p>
+      ) : (
+        <p>
+          Everything here, with your areas and saved routes, is kept in this browser as the same files the desktop app keeps in
+          its config folder. Export them as a .zip to keep a copy, edit them, or use them in the desktop app.
+        </p>
+      )}
+      <Folder cfg={cfg} status={status} />
       {/* Each section starts again from the file whenever the file changes. */}
       <MapSection key={JSON.stringify(config.map)} value={config.map} view={view} showOnMap={showOnMap} />
-      <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />
+      {rides && <HeatmapSection key={JSON.stringify(config.heatmap)} value={config.heatmap} />}
       <LayersSection key={JSON.stringify(config.layers)} value={config.layers} cfg={cfg} />
       <OutlineSection key={`outline ${JSON.stringify(config.map)}`} value={config.map} />
-      <h2>Excluded zones</h2>
-      <p>
-        Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
-        <code> .geojson</code> file in the <code>zones</code> folder is used too, so you can draw shapes in a tool such as geojson.io.
-      </p>
+      {rides && (
+        <>
+          <h2>Excluded zones</h2>
+          <p>
+            Add, move and resize zones in the sidebar on the map. They are kept in <code>zones/zones.geojson</code>. Any other
+            <code> .geojson</code> file in the <code>zones</code> folder is used too, so you can draw shapes in a tool such as geojson.io.
+          </p>
+        </>
+      )}
     </main>
   );
 }
 
-function Folder({ cfg }: { cfg: ConfigState }) {
+function Folder({ cfg, status }: { cfg: ConfigState; status: Status }) {
   const [error, setError] = useState<string | null>(null);
   const run = async (r: Promise<{ ok: boolean; error?: string }>) => {
     const x = await r;
     setError(x.ok ? null : (x.error ?? 'Something went wrong.'));
   };
+  const b = status.backup;
   return (
     <>
-      <h2>Config folder</h2>
-      <p><code className="path">{cfg.dir}</code></p>
-      <p className="small">
-        {cfg.source === 'env' ? 'Chosen by the TRAIL_CONFIG variable.' : cfg.source === 'chosen' ? 'A folder you chose.' : 'The default folder.'}
-        {' '}Keep it private: zones show where you live.
-      </p>
-      <div className="row">
-        <button onClick={() => void trail.openConfigDir()}>Open folder</button>
-        {cfg.source !== 'env' && <button onClick={() => void run(trail.pickConfigDir())}>Use another folder…</button>}
-        {cfg.source === 'chosen' && <button onClick={() => void run(trail.useDefaultConfigDir())}>Use the default folder</button>}
-      </div>
+      {status.features.storage === 'folder' ? (
+        <>
+          <h2>Config folder</h2>
+          <p><code className="path">{cfg.dir}</code></p>
+          <p className="small">
+            {cfg.source === 'env' ? 'Chosen by the TRAIL_CONFIG variable.' : cfg.source === 'chosen' ? 'A folder you chose.' : 'The default folder.'}
+            {' '}Keep it private: zones show where you live.
+          </p>
+          <div className="row">
+            <button onClick={() => void trail.openConfigDir()}>Open folder</button>
+            {cfg.source !== 'env' && <button onClick={() => void run(trail.pickConfigDir())}>Use another folder…</button>}
+            {cfg.source === 'chosen' && <button onClick={() => void run(trail.useDefaultConfigDir())}>Use the default folder</button>}
+          </div>
+        </>
+      ) : (
+        <>
+          <h2>Your config</h2>
+          <p className="small">
+            Kept in this browser on this computer only. Clearing site data, private windows, or a browser that tidies up storage
+            (Safari does after a week away) can lose it, so export a copy now and then.
+            {b && (b.unsaved > 0
+              ? ` ${b.unsaved} change${b.unsaved === 1 ? '' : 's'} since ${b.lastExport ? `the last export, ${new Date(b.lastExport).toLocaleString()}` : 'you started'}.`
+              : b.lastExport ? ` Everything is in the last export, ${new Date(b.lastExport).toLocaleString()}.` : '')}
+          </p>
+        </>
+      )}
+      <ExportImport />
       {error && <p className="error" role="alert">{error}</p>}
       {cfg.problems.length > 0 && (
         <div className="problems" role="alert">
@@ -326,5 +356,43 @@ function LayersSection({ value, cfg }: { value: LayerDef[]; cfg: ConfigState }) 
         );
       }}
     </Section>
+  );
+}
+
+/** Saves the whole config as one .zip, or replaces it from one. The same .zip works in the desktop app and on the website. */
+function ExportImport() {
+  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [confirm, setConfirm] = useState<File | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const load = async (f: File) => {
+    setConfirm(null);
+    const r = await trail.importConfig(new Uint8Array(await f.arrayBuffer()));
+    if (!r.ok) return setMsg({ text: r.error, error: true });
+    const v = r.value;
+    setMsg({
+      text: `Imported ${v.files} file${v.files === 1 ? '' : 's'} from ${f.name}.${v.skipped.length ? ` Left out ${v.skipped.length} that ${v.skipped.length === 1 ? 'is' : 'are'} not part of a config.` : ''}${v.problems ? ` ${v.problems} problem${v.problems === 1 ? '' : 's'} found: see below.` : ''}`,
+      error: false,
+    });
+  };
+  return (
+    <>
+      <div className="row">
+        <button onClick={async () => {
+          const r = await trail.exportConfig();
+          setMsg(r.ok ? (r.value ? { text: 'Exported.', error: false } : null) : { text: r.error, error: true });
+        }}>Export config (.zip)</button>
+        <button onClick={() => input.current?.click()}>Import config…</button>
+        <input ref={input} type="file" accept=".zip,application/zip" hidden aria-label="Config .zip to import"
+          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setConfirm(f); }} />
+      </div>
+      {confirm && (
+        <div className="row small" role="alert">
+          Replace your config with the files in {confirm.name}? Settings, areas and saved routes it holds replace yours. Map files are kept.
+          <button onClick={() => void load(confirm)}>Replace</button>
+          <button onClick={() => setConfirm(null)}>Cancel</button>
+        </div>
+      )}
+      {msg && <p className={`small${msg.error ? ' error' : ''}`} role="status">{msg.text}</p>}
+    </>
   );
 }

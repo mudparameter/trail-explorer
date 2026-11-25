@@ -2,19 +2,21 @@ import { constants, mkdirSync, watch } from 'node:fs';
 import { copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, utilityProcess, type UtilityProcess } from 'electron';
-import type { AreasState, Bounds, ConfigFile, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
-import { DESCENT_DEFAULTS, type DescentWish } from '../core/descent.ts';
-import { MAGIC, type MagicRequest, type PlanRequest } from '../core/planner.ts';
-import { KINDS, type OsmWay } from '../core/roads.ts';
-import { shapeBounds, type Shape } from '../core/shapes.ts';
-import { gpxLine, routeGpx, statsOfLine, type Difficulty, type PlannedRoute } from '../core/route.ts';
-import { isRouteId, newRouteId, parseRoutes, routeFile, ROUTES_FILE, routesText, type SavedRoute } from '../core/routes.ts';
+import type { AreasState, Bounds, ConfigFile, ConfigImport, ConfigState, ImportStatus, LayerState, MapInfo, PlanNetwork, PlanProgress, Result, RouteDetail, Saved, Status, View } from '../core/api.ts';
+import { type OsmWay } from '../core/roads.ts';
+import { shapeBounds } from '../core/shapes.ts';
+import { gpxLine, routeGpx, statsOfLine, type PlannedRoute } from '../core/route.ts';
+import { isRouteId, parseRoutes, routeFile, ROUTES_FILE, routesText, type SavedRoute } from '../core/routes.ts';
 import { TERRAIN_URL, TERRAIN_ZOOM, terrainTiles } from '../core/terrain.ts';
-import type { NetworkJob, NetworkResult } from './planwork.ts';
+import { planMagicJob, planRoutesJob, type NetworkJob, type NetworkResult } from '../core/planjobs.ts';
 import { fetchTerrain } from './terrain.ts';
-import { APP_ZONES, checkFile, DEFAULTS, FILES, fileText, mapOrigins, MAX_WIDTH, MIN_WIDTH, newMapIndex, parseConfig, type Config, type LayerDef, type Problem } from '../core/config.ts';
-import { AREAS_FILE, areasText, checkAreaEdit, checkGroupEdit, newAreaId, type Area, type AreaEdit, type AreaGroup, type GroupEdit } from '../core/areas.ts';
-import { Areas } from './areas.ts';
+import { APP_ZONES, DEFAULTS, FILES, fileText, mapOrigins, newMapIndex, type Config, type LayerDef, type Problem } from '../core/config.ts';
+import { AREAS_FILE, areasText, type Area, type AreaGroup } from '../core/areas.ts';
+import { Areas } from '../core/areadata.ts';
+import { overpass } from '../core/overpass.ts';
+import * as E from '../core/edits.ts';
+import { configFileText, gpxName, layersFromState, savedRoute } from '../core/edits.ts';
+import { configZip, readConfigZip } from '../core/configzip.ts';
 import { OsmStore } from './osm.ts';
 import { addCircle, editCircle, removeZone, type CircleEdit } from '../core/zones.ts';
 import { ConfigDir } from './configdir.ts';
@@ -162,71 +164,19 @@ function start() {
   let config: Config = DEFAULTS;
   let problems: Problem[] = [];
 
-  // Asks the config's Overpass servers for OpenStreetMap data. Public servers are
-  // often full, so busy answers are retried, then the next server is tried.
-  const BUSY = [429, 502, 503, 504];
-  const WAITS = [0, 3000, 8000, 20000];
-  async function overpass(query: string): Promise<unknown> {
-    const servers = test.overpass?.startsWith('http://127.0.0.1:') ? [test.overpass] : config.map.overpass;
-    const body = new URLSearchParams({ data: query }).toString();
-    let why = 'busy';
-    for (const server of servers) {
-      for (const ms of WAITS) {
-        if (ms) await new Promise((r) => setTimeout(r, test.overpass ? ms / 20 : ms));
-        let res: Response;
-        try {
-          res = await net.fetch(server, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-            body,
-            signal: AbortSignal.timeout(180_000),
-          });
-        } catch (e) {
-          if (!net.isOnline()) throw new Error('No internet. Downloading roads and trails needs it. Try again when you are online.');
-          why = (e as Error).name === 'TimeoutError' ? 'slow' : 'unreachable';
-          break; // try the next server
-        }
-        if (BUSY.includes(res.status)) {
-          why = 'busy';
-          await res.body?.cancel();
-          continue;
-        }
-        if (!res.ok) {
-          why = `error ${res.status}`;
-          break;
-        }
-        const text = await res.text();
-        let json: any;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          why = 'garbled';
-          break;
-        }
-        // Overpass reports running out of time or memory here, with a 200.
-        if (typeof json?.remark === 'string' && /error/i.test(json.remark)) {
-          why = 'unfinished';
-          break;
-        }
-        return json;
-      }
-    }
-    const host = servers.length === 1 ? new URL(servers[0]!).host : 'Every map data server';
-    throw new Error(
-      why === 'busy' ? `${host} is busy. Try again in a minute, or add another server in Customize.`
-        : why === 'slow' ? `${host} took too long. Try again later.`
-        : why === 'unfinished' ? `${host} could not finish. Try again later.`
-        : why === 'unreachable' ? `Could not reach ${host}.`
-        : `${host} sent something unexpected (${why}).`,
-    );
-  }
+  // Asks the config's Overpass servers for OpenStreetMap data, retrying busy ones.
+  const fetchOverpass = (query: string) => overpass(test.overpass?.startsWith('http://127.0.0.1:') ? [test.overpass] : config.map.overpass, query, {
+    fetch: (url, init) => net.fetch(url, init),
+    online: () => net.isOnline(),
+    ...(test.overpass ? { sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms / 20)) } : {}),
+  });
   const osm = new OsmStore(join(data, 'osm.db'));
   let areasTimer: NodeJS.Timeout | null = null;
   const areasState = (): AreasState => {
     const list = areas.view();
     return { areas: list, groups: areas.groupView(list) };
   };
-  const areas = new Areas(osm, overpass, () => {
+  const areas = new Areas(osm, fetchOverpass, () => {
     areasTimer ??= setTimeout(() => {
       areasTimer = null;
       if (win && !win.isDestroyed()) win.webContents.send('trail:areas', areasState());
@@ -398,6 +348,7 @@ function start() {
   function status(): Status {
     const c = store.counts();
     return {
+      features: { garmin: true, rides: true, mapFiles: true, storage: 'folder' },
       hasKey,
       keyProblem: keyUnreadable ?? sync.keyProblem,
       keyExpires: store.get<string>('keyExpires'),
@@ -433,7 +384,6 @@ function start() {
     }
   };
   const dateOrNull = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
-  const isId = (v: unknown): v is string => typeof v === 'string' && v.length < 100;
 
   handle('getStatus', status);
   handle('saveKey', (key: unknown, expires: unknown) =>
@@ -495,33 +445,10 @@ function start() {
   handle('saveConfig', (file: unknown, value: unknown) => result(async () => {
     if (!FILES.includes(file as ConfigFile)) throw new Error('Unknown config file.');
     const f = file as ConfigFile;
-    const bad = checkFile(f, value);
-    if (bad.length) throw new Error(bad.map((p) => p.message).join(' '));
-    // Read back the same way a hand-edited file would be, so both end up alike.
-    const next = parseConfig({ [f]: JSON.stringify(value) }).config;
-    await cfgDir.write(f, fileText(f, { ...config, map: next.map, heatmap: next.heatmap, layers: f === 'layers.json' ? next.layers : config.layers }, await cfgDir.read(f)));
+    await cfgDir.write(f, configFileText(f, value, config, await cfgDir.read(f)));
     await reload();
   }));
-  handle('saveLayers', (ls: unknown) => result(async () => {
-    if (!Array.isArray(ls) || ls.length > 500) throw new Error('Unknown layers.');
-    const state = new Map<string, LayerState>();
-    for (const l of ls) if (isId(l?.id) && typeof l.on === 'boolean' && Number.isFinite(l.opacity)) state.set(l.id, l);
-    const order = [...state.keys()];
-    const rank = (l: LayerDef) => (state.has(l.id) ? order.indexOf(l.id) : order.length);
-    const layers = config.layers
-      .map((l) => {
-        const st = state.get(l.id);
-        if (!st) return l;
-        const next = { ...l, on: st.on, opacity: Math.max(0.05, Math.min(1, Math.round(st.opacity * 100) / 100)) };
-        if ((next.type !== 'heatmap' && next.type !== 'roads') || st.width === undefined || !Number.isFinite(st.width)) return next;
-        const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(st.width * 100) / 100));
-        return width === 1 ? { ...next, width: undefined } : { ...next, width };
-      })
-      .map((l, i) => ({ l, i }))
-      .sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i)
-      .map((x) => x.l);
-    await writeLayers(layers);
-  }));
+  handle('saveLayers', (ls: unknown) => result(() => writeLayers(layersFromState(config.layers, ls))));
   const addMap = (path: unknown) => result(async (): Promise<MapInfo> => {
     if (typeof path !== 'string' || !path) throw new Error('That file could not be opened.');
     const { file, info } = await maps.add(path);
@@ -571,6 +498,20 @@ function start() {
     await cfgDir.write(APP_ZONES, removeZone(await cfgDir.read(APP_ZONES), at));
     await reload();
   }));
+  handle('exportConfig', () => result(async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const r = await dialog.showSaveDialog(win!, { title: 'Export config', defaultPath: join(app.getPath('downloads'), `trail-explorer-config-${day}.zip`), filters: [{ name: 'Zip', extensions: ['zip'] }] });
+    if (r.canceled || !r.filePath) return false;
+    await writeFile(r.filePath, configZip(await cfgDir.allFiles()));
+    return true;
+  }));
+  handle('importConfig', (data: unknown) => result(async (): Promise<ConfigImport> => {
+    if (!(data instanceof Uint8Array)) throw new Error('That file could not be read.');
+    const z = readConfigZip(data);
+    await cfgDir.importFiles(z.files);
+    await reload();
+    return { files: Object.keys(z.files).length, skipped: z.skipped, problems: z.problems.length };
+  }));
   handle('pickConfigDir', () => result(async () => {
     if (envDir) throw new Error('The TRAIL_CONFIG variable chooses the config folder, so it cannot be changed here.');
     const r = await dialog.showOpenDialog(win!, { title: 'Use config folder', properties: ['openDirectory', 'createDirectory'] });
@@ -615,42 +556,18 @@ function start() {
     areaWrites = next.catch(() => {});
     return next;
   };
-  /** A circle's radius is kept in whole metres. */
-  const tidy = (s: Shape): Shape => (s.kind === 'circle' ? { ...s, radius: Math.round(s.radius) } : s);
   handle('addArea', (a: { shape?: unknown; name?: unknown; group?: unknown }) => result(async () => {
-    const edit = { shape: a?.shape, name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : null, group: a?.group ?? null } as AreaEdit;
-    if (edit.shape === undefined) throw new Error('An area needs a place and a size.');
-    checkAreaEdit(edit);
     let id = '';
-    await editAreas((list, groups) => {
-      if (edit.group && !groups.some((g) => g.id === edit.group)) throw new Error('That group is no longer in areas.json.');
-      id = newAreaId([...list, ...groups]);
-      // An area added to a group takes on what the group shows and hides.
-      const like = list.find((x) => x.group && x.group === edit.group);
-      return [...list, { id, name: edit.name ?? null, shape: tidy(edit.shape!), on: like?.on ?? true, hide: like ? [...like.hide] : [], group: edit.group ?? null }];
+    await editAreas((areas, groups) => {
+      const r = E.addArea({ areas, groups }, a);
+      id = r.id;
+      return r;
     });
     return id;
   }));
-  handle('editArea', (id: unknown, e: unknown) => result(async () => {
-    const edit = (e ?? {}) as AreaEdit;
-    checkAreaEdit(edit);
-    const clean: AreaEdit = {};
-    if (edit.name !== undefined) clean.name = edit.name?.trim() || null;
-    if (edit.on !== undefined) clean.on = edit.on;
-    if (edit.hide !== undefined) clean.hide = [...new Set(edit.hide)];
-    if (edit.shape !== undefined) clean.shape = tidy(edit.shape);
-    if (edit.group !== undefined) clean.group = edit.group;
-    await editAreas((list, groups) => {
-      if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
-      if (clean.group && !groups.some((g) => g.id === clean.group)) throw new Error('That group is no longer in areas.json.');
-      return list.map((a) => (a.id === id ? { ...a, ...clean } : a));
-    });
-  }));
+  handle('editArea', (id: unknown, e: unknown) => result(() => editAreas((areas, groups) => E.editArea({ areas, groups }, id, e))));
   handle('removeArea', (id: unknown) => result(async () => {
-    await editAreas((list) => {
-      if (!list.some((a) => a.id === id)) throw new Error('That area is no longer in areas.json.');
-      return list.filter((a) => a.id !== id);
-    });
+    await editAreas((areas, groups) => E.removeArea({ areas, groups }, id));
     const n = areas.prune();
     if (n) console.log(`Dropped ${n} roads no area uses.`);
   }));
@@ -658,33 +575,17 @@ function start() {
     if (typeof id === 'string') areas.retry(id);
   }));
   handle('addGroup', (name: unknown, ids: unknown) => result(async () => {
-    checkGroupEdit({ name: name as string });
-    if (!Array.isArray(ids) || !ids.length || ids.some((x) => typeof x !== 'string')) throw new Error('Choose at least one area for the group.');
     let id = '';
-    await editAreas((list, groups) => {
-      if (!ids.every((x) => list.some((a) => a.id === x))) throw new Error('One of those areas is no longer in areas.json.');
-      id = newAreaId([...list, ...groups], Math.random, 'g-');
-      return { areas: list.map((a) => (ids.includes(a.id) ? { ...a, group: id } : a)), groups: [...groups, { id, name: (name as string).trim(), joined: false }] };
+    await editAreas((areas, groups) => {
+      const r = E.addGroup({ areas, groups }, name, ids);
+      id = r.id;
+      return r;
     });
     return id;
   }));
-  handle('editGroup', (id: unknown, e: unknown) => result(async () => {
-    const edit = (e ?? {}) as GroupEdit;
-    checkGroupEdit(edit);
-    const clean: GroupEdit = {};
-    if (edit.name !== undefined) clean.name = edit.name.trim();
-    if (edit.joined !== undefined) clean.joined = edit.joined;
-    await editAreas((list, groups) => {
-      if (!groups.some((g) => g.id === id)) throw new Error('That group is no longer in areas.json.');
-      return { areas: list, groups: groups.map((g) => (g.id === id ? { ...g, ...clean } : g)) };
-    });
-  }));
+  handle('editGroup', (id: unknown, e: unknown) => result(() => editAreas((areas, groups) => E.editGroup({ areas, groups }, id, e))));
   handle('removeGroup', (id: unknown, withAreas: unknown) => result(async () => {
-    await editAreas((list, groups) => {
-      if (!groups.some((g) => g.id === id)) throw new Error('That group is no longer in areas.json.');
-      const left = withAreas === true ? list.filter((a) => a.group !== id) : list.map((a) => (a.group === id ? { ...a, group: null } : a));
-      return { areas: left, groups: groups.filter((g) => g.id !== id) };
-    });
+    await editAreas((areas, groups) => E.removeGroup({ areas, groups }, id, withAreas));
     if (withAreas === true) {
       const n = areas.prune();
       if (n) console.log(`Dropped ${n} roads no area uses.`);
@@ -722,56 +623,18 @@ function start() {
     planProgress({ stage: 'network', done: 0, total: 1 });
     const key = `${n}:${ids.join(',')}`;
     const out = await runJob<NetworkResult>('planNetwork', {
-      key, ways: [...ways.values()], shapes, tracks: store.tracks(config.heatmap.hide), bounds, terrainDir,
+      key, ways: [...ways.values()], shapes, tracks: store.tracks(config.heatmap.hide), bounds, terrain: terrainDir,
     } satisfies NetworkJob);
     return { key, ...out, bounds, missingElevation };
   }));
-  /** Asking again: which variant, the routes already shown, and the difficulty wished for. */
-  const planMore = (o: unknown) => {
-    const x = (o ?? {}) as { variant?: unknown; seen?: unknown; difficulty?: unknown };
-    const variant = Number.isInteger(x.variant) && (x.variant as number) >= 0 && (x.variant as number) < 1e6 ? (x.variant as number) : 0;
-    const seen = Array.isArray(x.seen) ? x.seen.filter((s): s is string => typeof s === 'string').slice(0, 500) : [];
-    const difficulty = typeof x.difficulty === 'string' && x.difficulty in MAGIC ? (x.difficulty as Difficulty) : null;
-    return { variant, seen, difficulty };
-  };
-  /** A long descent asked for, checked; null when not asked for. */
-  const descentOf = (x: any): DescentWish | null => {
-    if (x == null) return null;
-    if (!(typeof x.length === 'number' && x.length >= 500 && x.length <= 100_000)) throw new Error('Choose a descent length from 0.5 to 100 km.');
-    if (!(typeof x.maxClimb === 'number' && x.maxClimb >= 0 && x.maxClimb <= 500)) throw new Error('Choose the most the descent may climb, from 0 to 500 m.');
-    if (!(typeof x.minGrade === 'number' && x.minGrade >= DESCENT_DEFAULTS.minGrade && x.minGrade <= 50)) throw new Error(`Choose the descent's average steepness, from ${DESCENT_DEFAULTS.minGrade} to 50%.`);
-    return { length: x.length, maxClimb: x.maxClimb, minGrade: x.minGrade };
-  };
-  handle('planRoutes', (key: unknown, r: any, o: unknown) => result(async () => {
-    const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
-    if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
-    if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
-    if (r.climb !== null && !(typeof r.climb === 'number' && r.climb >= 0 && r.climb <= 10_000)) throw new Error('Choose climbing from 0 to 10,000 m, or leave it empty.');
-    if (!['little', 'some', 'lots'].includes(r.newTrail)) throw new Error('Choose how much new trail.');
-    const kinds = Array.isArray(r.kinds) ? r.kinds.filter((k: unknown) => KINDS.some((x) => x.kind === k)) : [];
-    if (!kinds.length) throw new Error('Choose at least one kind of path.');
-    if (r.maxDown != null && !(typeof r.maxDown === 'number' && r.maxDown >= 1 && r.maxDown <= 100)) throw new Error('Choose a steepest descent from 1 to 100%, or leave it empty.');
-    if (r.maxUp != null && !(typeof r.maxUp === 'number' && r.maxUp >= 1 && r.maxUp <= 100)) throw new Error('Choose a steepest climb from 1 to 100%, or leave it empty.');
-    if (r.tolerance != null && !(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
-    const more = planMore(o);
-    const request: PlanRequest = {
-      start: r.start, finish: r.finish, distance: r.distance, climb: r.climb, newTrail: r.newTrail, kinds, allowRestricted: r.allowRestricted === true,
-      maxDown: r.maxDown ?? null, maxUp: r.maxUp ?? null, variant: more.variant, favorites: r.favorites === true, tolerance: r.tolerance ?? null,
-      descent: descentOf(r.descent),
-    };
-    planned = await runJob<PlannedRoute[]>('planRoutes', { key, request, seen: more.seen, difficulty: more.difficulty });
+  handle('planRoutes', (key: unknown, r: unknown, o: unknown) => result(async () => {
+    const job = planRoutesJob(key, r, o);
+    planned = await runJob<PlannedRoute[]>('planRoutes', job);
     if (!planned.length) throw new Error('No routes could be made from there. Try a shorter distance, more kinds of path, or a start inside an area.');
     return planned;
   }));
-  handle('planMagic', (key: unknown, r: any, o: unknown) => result(async () => {
-    const point = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
-    if (typeof key !== 'string' || !r || !point(r.start) || (r.finish !== null && !point(r.finish))) throw new Error('Place a start first.');
-    if (!(typeof r.distance === 'number' && r.distance >= 500 && r.distance <= 300_000)) throw new Error('Choose a distance from 0.5 to 300 km.');
-    if (!(typeof r.tolerance === 'number' && r.tolerance >= 0 && r.tolerance <= 100_000)) throw new Error('Choose how far off the distance may be, from 0 to 100 km.');
-    if (!(r.difficulty in MAGIC)) throw new Error('Choose a difficulty for magic routes.');
-    const more = planMore(o);
-    const request: MagicRequest = { start: r.start, finish: r.finish, distance: r.distance, tolerance: r.tolerance, difficulty: r.difficulty, variant: more.variant, favorites: r.favorites === true, descent: descentOf(r.descent) };
-    planned = await runJob<PlannedRoute[]>('planMagic', { key, request, seen: more.seen });
+  handle('planMagic', (key: unknown, r: unknown, o: unknown) => result(async () => {
+    planned = await runJob<PlannedRoute[]>('planMagic', planMagicJob(key, r, o));
     return planned;
   }));
 
@@ -799,16 +662,10 @@ function start() {
   handle('saveRoute', (plannedId: unknown, name: unknown) => result(() => {
     const p = planned.find((x) => x.id === plannedId);
     if (!p) throw new Error('That route is no longer on screen. Plan again to save it.');
-    const clean = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : p.name;
     return editRoutes(async (list) => {
-      const created = new Date().toISOString();
-      const s: SavedRoute = {
-        id: newRouteId(new Set(list.map((r) => r.id))), name: clean, created, loop: p.loop, start: [p.line[0]![0], p.line[0]![1]],
-        distance: p.stats.distance, gain: p.stats.gain, loss: p.stats.loss, maxUp: p.stats.maxUp, maxDown: p.stats.maxDown,
-        difficulty: p.rating.difficulty, fresh: p.fresh,
-      };
-      await cfgDir.write(routeFile(s.id), routeGpx(clean, p.line, created));
-      return { list: [...list, s], value: s };
+      const { route, gpx } = savedRoute(list, p, name);
+      await cfgDir.write(routeFile(route.id), gpx);
+      return { list: [...list, route], value: route };
     });
   }));
   handle('renameRoute', (id: unknown, name: unknown) => result(() => {
@@ -831,8 +688,7 @@ function start() {
     const route = parseRoutes(await cfgDir.read(ROUTES_FILE)).find((r) => r.id === id);
     const gpx = route && (await cfgDir.read(routeFile(route.id)));
     if (!route || !gpx) throw new Error('That route is no longer saved.');
-    const safe = route.name.replace(/[^\w .,()-]+/g, '_').slice(0, 80) || 'route';
-    const r = await dialog.showSaveDialog(win!, { title: 'Download route', defaultPath: join(app.getPath('downloads'), `${safe}.gpx`), filters: [{ name: 'GPX', extensions: ['gpx'] }] });
+    const r = await dialog.showSaveDialog(win!, { title: 'Download route', defaultPath: join(app.getPath('downloads'), gpxName(route.name)), filters: [{ name: 'GPX', extensions: ['gpx'] }] });
     if (r.canceled || !r.filePath) return false;
     await writeFile(r.filePath, gpx);
     return true;

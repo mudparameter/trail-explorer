@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AreasState, AreaView, Bounds, ConfigState, GroupView, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
+import type { AreasState, AreaView, Backup, Bounds, ConfigState, GroupView, LayerState, MapInfo, Saved, Status, View } from '../core/api.ts';
 import { layerState, type Config, type LayerDef } from '../core/config.ts';
 import type { AreaEdit, GroupEdit } from '../core/areas.ts';
 import { KINDS, type Road, type RoadKind } from '../core/roads.ts';
 import { MIN_AREA, MIN_SIDE, shapeProblem, type Shape } from '../core/shapes.ts';
-import { trail } from './api.ts';
+import { asset, trail } from './api.ts';
 import { Customize } from './Customize.tsx';
 import { buildStyle, KEY_SEP, type Bundled, type StyleArea } from './mapstyle.ts';
 import { MapView } from './MapView.tsx';
@@ -57,6 +57,9 @@ function withStates(config: Config, states: LayerState[]): Config {
   return { ...config, layers };
 }
 
+/** Changes kept only in a browser: ask for a file copy once there are 10, or the oldest is a day old. */
+export const remind = (b: Backup) => b.unsaved > 0 && (b.unsaved >= 10 || (b.since !== null && Date.now() - Date.parse(b.since) >= 86_400_000));
+
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -98,7 +101,7 @@ export function App() {
   };
   useEffect(() => {
     const json = (u: string) => fetch(u).then((r) => r.json());
-    void Promise.all([trail.getStatus(), trail.getSaved(), trail.getConfig(), json('trail://styles/liberty.json'), json('trail://styles/shortbread.json')])
+    void Promise.all([trail.getStatus(), trail.getSaved(), trail.getConfig(), json(asset('styles', 'liberty.json')), json(asset('styles', 'shortbread.json'))])
       .then(([st, sv, c, liberty, shortbread]) => {
         config(c);
         setBundled({ liberty, shortbread });
@@ -261,6 +264,7 @@ export function App() {
   };
 
   const hv = status?.heatmapVersion ?? 0;
+  const rides = status?.features.rides ?? true;
   const shown = useMemo(() => (cfg ? withStates(cfg.config, layers) : null), [cfg, layers]);
   const styleAreas = useMemo((): StyleArea[] => {
     const joined = new Map(groups.filter((g) => g.joined).map((g) => [g.id, g]));
@@ -279,8 +283,8 @@ export function App() {
     return out;
   }, [areas, groups, roads]);
   const style = useMemo(
-    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones, drawing, areas: styleAreas, selected }) : null),
-    [shown, cfg, bundled, hv, showZones, drawing, styleAreas, selected],
+    () => (bundled && cfg && shown ? buildStyle({ config: shown, maps: cfg.maps, bundled, heatVersion: hv, showZones: showZones && rides, drawing, areas: styleAreas, selected, rides }) : null),
+    [shown, cfg, bundled, hv, showZones, drawing, styleAreas, selected, rides],
   );
   const listedGroup = groups.find((g) => g.id === listed && g.joined) ?? null;
   const listedArea: AreaView | GroupView | null = listedGroup ?? areas.find((a) => a.id === listed) ?? null;
@@ -290,7 +294,7 @@ export function App() {
   };
   if (!status || !saved || !cfg || !shown || !style) return null;
 
-  if (!status.hasKey && status.sync.total === 0 && screen === 'map') {
+  if (status.features.garmin && !status.hasKey && status.sync.total === 0 && screen === 'map') {
     return (
       <main className="page">
         <h1>Trail Explorer</h1>
@@ -302,7 +306,7 @@ export function App() {
 
   if (planning) {
     return (
-      <Planner config={shown} maps={cfg.maps} bundled={bundled!} areas={areas} groups={groups}
+      <Planner config={shown} maps={cfg.maps} bundled={bundled!} areas={areas} groups={groups} rides={status.features.rides}
         exit={() => { setPlanning(false); setScreen('map'); }} showRoutes={() => { setPlanning(false); setScreen('routes'); }} />
     );
   }
@@ -335,6 +339,14 @@ export function App() {
         {!status.keyProblem && status.hasKey && daysLeft !== null && daysLeft <= 14 && screen !== 'settings' && (
           <div className="notice">
             Your Garmin key {daysLeft <= 0 ? 'has expired' : `expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`}. <button onClick={() => setScreen('settings')}>Replace it</button>
+          </div>
+        )}
+        {status.backup && screen !== 'customize' && remind(status.backup) && (
+          <div className="notice" role="status">
+            {status.backup.unsaved} change{status.backup.unsaved === 1 ? '' : 's'} to your config {status.backup.unsaved === 1 ? 'is' : 'are'} only in this browser,
+            which can lose them. Save a copy to a file.{' '}
+            <button onClick={() => void trail.exportConfig()}>Export config</button>{' '}
+            <button onClick={() => setScreen('customize')}>More</button>
           </div>
         )}
         {cfg.problems.length > 0 && screen !== 'customize' && (
@@ -377,7 +389,7 @@ export function App() {
             )}
           </div>
         )}
-        {screen === 'customize' && <Customize cfg={cfg} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
+        {screen === 'customize' && <Customize cfg={cfg} status={status} view={view} showOnMap={(v) => { setScreen('map'); go(v); }} />}
         {screen === 'routes' && <RoutesScreen config={shown} maps={cfg.maps} bundled={bundled!} plan={() => setPlanning(true)} />}
         {screen === 'settings' && <Settings status={status} />}
         {screen === 'help' && <Help />}

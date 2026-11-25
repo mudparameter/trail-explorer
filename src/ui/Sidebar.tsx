@@ -70,10 +70,14 @@ export function Sidebar(p: Props) {
   const s = status.sync;
   const states: LayerState[] = config.layers.map(layerState);
   const set = (id: string, v: Partial<LayerState>) => p.change(states.map((l) => (l.id === id ? { ...l, ...v } : l)));
-  const move = (i: number, d: number) => {
+  /** Swaps a layer with the next one shown above or below it. Hidden layers keep their place. */
+  const move = (id: string, d: number) => {
+    const shown = states.filter((l) => status.features.rides || config.layers.find((x) => x.id === l.id)?.type !== 'heatmap');
+    const other = shown[shown.findIndex((l) => l.id === id) + d];
+    if (!other) return;
+    const a = states.findIndex((l) => l.id === id), b = states.findIndex((l) => l.id === other.id);
     const ls = [...states];
-    const [l] = ls.splice(i, 1);
-    ls.splice(i + d, 0, l!);
+    [ls[a], ls[b]] = [ls[b]!, ls[a]!];
     p.change(ls);
   };
   const busy = s.state !== 'idle' && s.state !== 'error' && s.state !== 'key-rejected';
@@ -84,6 +88,7 @@ export function Sidebar(p: Props) {
     return x.ok;
   };
 
+  const { rides, mapFiles } = status.features;
   return (
     <aside className="side">
       <h1>Trail Explorer</h1>
@@ -93,6 +98,7 @@ export function Sidebar(p: Props) {
         ))}
       </nav>
 
+      {rides && <>
       <h2>Rides</h2>
       {s.state === 'downloading' ? (
         <>
@@ -106,16 +112,21 @@ export function Sidebar(p: Props) {
       {s.buildingHeatmap && <p className="small">Drawing the heatmap…</p>}
       {s.noGps > 0 && <p className="small">{s.noGps} without GPS skipped</p>}
       {s.failed > 0 && <p className="small">{s.failed} could not be read</p>}
-      <p className="small">Last sync: {ago(s.lastSync)}</p>
+      {status.features.garmin && <p className="small">Last sync: {ago(s.lastSync)}</p>}
+      {status.import?.state === 'reading' && <p className="small" role="status">Reading {status.import.file}: {status.import.added} new so far…</p>}
+      {!status.features.garmin && status.import && status.import.state !== 'reading' && <p className={`small${status.import.state === 'error' ? ' error' : ''}`} role="status">{status.import.message}</p>}
       <div className="row">
-        <button disabled={busy || !status.hasKey} onClick={() => void trail.syncNow()}>Sync now</button>
+        {status.features.garmin
+          ? <button disabled={busy || !status.hasKey} onClick={() => void trail.syncNow()}>Sync now</button>
+          : <button disabled={status.import?.state === 'reading'} onClick={() => void report(trail.importRides())}>Import rides…</button>}
         <button onClick={p.goToRides}>Go to my rides</button>
       </div>
+      </>}
 
       <h2>Layers</h2>
       <p className="small">The top of the list is drawn on top.</p>
       <ul className="layers">
-        {config.layers.map((l, i) => {
+        {config.layers.filter((l) => rides || l.type !== 'heatmap').map((l, i, shownLayers) => {
           const info = l.type === 'file' ? cfg.maps[l.id] : undefined;
           const missing = l.type === 'file' && !info;
           return (
@@ -127,8 +138,8 @@ export function Sidebar(p: Props) {
                   {missing && <span className="small error"> (file not found)</span>}
                 </label>
                 <span className="order">
-                  <button aria-label={`Move ${l.name} up`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-                  <button aria-label={`Move ${l.name} down`} disabled={i === config.layers.length - 1} onClick={() => move(i, 1)}>↓</button>
+                  <button aria-label={`Move ${l.name} up`} disabled={i === 0} onClick={() => move(l.id, -1)}>↑</button>
+                  <button aria-label={`Move ${l.name} down`} disabled={i === shownLayers.length - 1} onClick={() => move(l.id, 1)}>↓</button>
                 </span>
               </div>
               {l.on && (
@@ -171,10 +182,12 @@ export function Sidebar(p: Props) {
           );
         })}
       </ul>
-      <button disabled={p.adding} onClick={p.addMap}>{p.adding ? 'Adding map…' : 'Add map'}</button>
-      <p className="small">Or drop a map file on the window.</p>
+      {mapFiles && <>
+        <button disabled={p.adding} onClick={p.addMap}>{p.adding ? 'Adding map…' : 'Add map'}</button>
+        <p className="small">Or drop a map file on the window.</p>
+      </>}
 
-      <Zones {...p} report={report} />
+      {rides && <Zones {...p} report={report} />}
 
       <AreaList
         areas={p.areas} groups={p.groups} edit={p.editArea} editGroup={p.editGroup} editMembers={p.editMembers}
@@ -186,12 +199,14 @@ export function Sidebar(p: Props) {
         <p className="small">{p.areas.some((a) => a.state === 'ready') ? 'Plan routes in these areas that take in trails you haven\'t ridden.' : 'Draw an area first, then plan routes in it.'}</p>
       </div>
 
-      <h2>Times ridden</h2>
-      <ul className="legend">
-        {config.heatmap.bands.map((b, i) => (
-          <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{labels[i]}</li>
-        ))}
-      </ul>
+      {rides && <>
+        <h2>Times ridden</h2>
+        <ul className="legend">
+          {config.heatmap.bands.map((b, i) => (
+            <li key={b.from}><span style={{ background: b.color, borderColor: config.heatmap.outline }} />{labels[i]}</li>
+          ))}
+        </ul>
+      </>}
     </aside>
   );
 }

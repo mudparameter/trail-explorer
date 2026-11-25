@@ -5,6 +5,7 @@ import type { AreaLine, Config } from '../core/config.ts';
 import { KINDS, roadsGeoJson, type Road } from '../core/roads.ts';
 import { shapeRing, unionEdge, type Shape } from '../core/shapes.ts';
 import { zonesGeoJson } from '../core/zones.ts';
+import { asset, heatmapUrl } from './api.ts';
 
 export const ZONES = 'zones';
 export const ZONE_COLOR = '#d0021b';
@@ -107,9 +108,11 @@ export interface StyleInput {
   areas?: StyleArea[];
   /** The selected road, as area id + KEY_SEP + road key. */
   selected?: string | null;
+  /** There are rides to draw. False on the website until rides are added: the heatmap layer is left out. */
+  rides?: boolean;
 }
 
-export function buildStyle({ config, maps, bundled, heatVersion, showZones, drawing, areas = [], selected = null }: StyleInput): StyleSpecification {
+export function buildStyle({ config, maps, bundled, heatVersion, showZones, drawing, areas = [], selected = null, rides = true }: StyleInput): StyleSpecification {
   const sources: Record<string, SourceSpecification> = {};
   const out: LayerSpecification[] = [{ id: 'paper', type: 'background', paint: { 'background-color': config.map.background } }];
   const { bands, outline } = config.heatmap;
@@ -121,7 +124,8 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
     const k = def.opacity;
     const map = def.type === 'file' ? maps[def.id] : undefined;
     if (def.type === 'heatmap') {
-      sources.heatmap = { type: 'geojson', data: `trail://heatmap/heatmap.json?v=${heatVersion}`, tolerance: 0.3, maxzoom: 15 };
+      if (!rides) continue;
+      sources.heatmap = { type: 'geojson', data: heatmapUrl(heatVersion), tolerance: 0.3, maxzoom: 15 };
       const width = widths([[2, 1.6], [9, 2], [13, 3.5], [16, 6], [19, 10]], def.width);
       const layout: any = { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'n'] };
       const color: any = bands.length > 1 ? ['step', ['get', 'n'], bands[0]!.color, ...bands.slice(1).flatMap((b) => [b.from, b.color])] : bands[0]!.color;
@@ -160,7 +164,7 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
       for (const l of bundled.liberty.layers) out.push(put(l, def.id, k));
     } else if (map) {
       const src = `map/${map.id}`;
-      const tiles = [`trail://maps/${map.id}/{z}/{x}/{y}`];
+      const tiles = [asset('maps', `${map.id}/{z}/{x}/{y}`)];
       const common = { tiles, bounds: map.bounds, minzoom: map.minzoom, maxzoom: map.maxzoom, attribution: map.attribution };
       if (map.kind === 'raster') {
         sources[src] = { type: 'raster', tileSize: 256, ...common };
@@ -235,8 +239,8 @@ export function buildStyle({ config, maps, bundled, heatVersion, showZones, draw
   }
   return {
     version: 8,
-    glyphs: 'trail://fonts/{fontstack}/{range}.pbf',
-    sprite: [{ id: 'default', url: 'trail://sprites/ofm' }, { id: 'base', url: 'trail://sprites/base' }],
+    glyphs: asset('fonts', '{fontstack}/{range}.pbf'),
+    sprite: [{ id: 'default', url: asset('sprites', 'ofm') }, { id: 'base', url: asset('sprites', 'base') }],
     sources,
     layers: out,
   };

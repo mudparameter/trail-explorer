@@ -5,7 +5,8 @@ import { dirname, join } from 'node:path';
 import { AREAS_FILE } from '../core/areas.ts';
 import { APP_ZONES, FILES, fileText, parseConfig, type Config, type Problem } from '../core/config.ts';
 import { CONFIG_README } from '../core/config-readme.ts';
-import { isRouteId, ROUTES_FILE } from '../core/routes.ts';
+import { isConfigPath, type ConfigFiles } from '../core/configzip.ts';
+import { isRouteId, parseRoutes, ROUTES_FILE } from '../core/routes.ts';
 
 const MAX_FILE = 20 * 1024 ** 2;
 /** The only files the app writes. Map files go through Maps. */
@@ -78,6 +79,38 @@ export class ConfigDir {
   async remove(file: string) {
     if (!writable(file)) throw new Error(`The app does not delete ${file}.`);
     await rm(join(this.dir, file), { force: true });
+  }
+
+  /** Every config text file, for exporting: the files the config reads, saved routes, and zones. */
+  async allFiles(): Promise<ConfigFiles> {
+    const { files } = await this.files();
+    const routes = await readdir(join(this.dir, 'routes')).catch(() => [] as string[]);
+    for (const f of [ROUTES_FILE, ...routes.map((r) => `routes/${r}`)]) {
+      if (!isConfigPath(f)) continue;
+      const text = await this.read(f);
+      if (text !== undefined) files[f] = text;
+    }
+    return files;
+  }
+
+  /**
+   * Writes the files from an imported config. Saved routes no longer listed in
+   * its routes.json are deleted; other files not in it, and map files, are kept.
+   */
+  async importFiles(files: ConfigFiles) {
+    for (const [f, text] of Object.entries(files)) {
+      if (!isConfigPath(f) || f === 'README.md') continue;
+      const full = join(this.dir, f);
+      await mkdir(dirname(full), { recursive: true });
+      await writeFile(`${full}.part`, text);
+      await rename(`${full}.part`, full);
+    }
+    if (files[ROUTES_FILE] !== undefined) {
+      const keep = new Set(parseRoutes(files[ROUTES_FILE]).map((r) => `${r.id}.gpx`));
+      for (const r of await readdir(join(this.dir, 'routes')).catch(() => [] as string[])) {
+        if (r.endsWith('.gpx') && !keep.has(r)) await rm(join(this.dir, 'routes', r), { force: true });
+      }
+    }
   }
 
   /** Calls `fn` shortly after anything in the folder changes. Returns a function that stops watching. */

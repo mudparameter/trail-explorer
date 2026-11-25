@@ -60,6 +60,7 @@ export function Settings({ status }: { status: Status }) {
   return (
     <main className="page">
       <h1>Settings</h1>
+      {status.features.garmin && <>
       <h2>Garmin key</h2>
       <p>{status.keyProblem ?? (status.hasKey ? 'A key is saved.' : 'No key is saved.')}</p>
       {status.hasKey && !form && (
@@ -75,11 +76,15 @@ export function Settings({ status }: { status: Status }) {
         </>
       )}
       {form && <KeyForm onSaved={() => setReplace(false)} />}
-      <ImportRides status={status.import} />
+      </>}
+      {status.features.rides && <>
+      <ImportRides status={status.import} browser={status.features.storage === 'browser'} />
       <h2>Ride data</h2>
-      <p>{status.sync.onMap} rides are stored on this computer.</p>
-      <Confirm label="Delete all rides" question="Delete every ride from this computer? Garmin may only return about the last three years." action={() => trail.deleteRides()} />
-      <p className="small">While a key is saved, the next sync downloads rides again. Remove the key first to keep them deleted.</p>
+      <p>{status.sync.onMap} rides are stored {status.features.storage === 'browser' ? 'in this browser. They are not in the config export: import the .zip again to have them elsewhere' : 'on this computer'}.</p>
+      <Confirm label="Delete all rides" question={status.features.garmin ? 'Delete every ride from this computer? Garmin may only return about the last three years.' : 'Delete every ride from this browser? You can import them again from the .zip.'} action={() => trail.deleteRides()} />
+      {status.features.garmin && <p className="small">While a key is saved, the next sync downloads rides again. Remove the key first to keep them deleted.</p>}
+      </>}
+      {!status.features.rides && <p>Your areas, settings and saved routes are kept in this browser. Export or import them in Customize.</p>}
       <p className="small">Trail Explorer {status.version}</p>
     </main>
   );
@@ -174,7 +179,7 @@ export function Help() {
 }
 
 /** Adds rides from an export .zip, such as Garmin's "Export your data" or Strava's. */
-function ImportRides({ status: s }: { status: ImportStatus | null }) {
+function ImportRides({ status: s, browser }: { status: ImportStatus | null; browser: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const reading = s?.state === 'reading';
   return (
@@ -183,6 +188,7 @@ function ImportRides({ status: s }: { status: ImportStatus | null }) {
       <p>
         Add rides from a .zip of ride files, such as the export Garmin Connect or Strava emails you. Rides already here, from Garmin
         or an earlier import, are left out. The .zip is only read: just the new rides are kept.
+        {browser && ' It is read here in your browser, and nothing is uploaded.'}
       </p>
       <button disabled={reading} onClick={async () => {
         setError(null);

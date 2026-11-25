@@ -10,6 +10,9 @@
     "build": "electron-vite build",
     "start": "node scripts/check-sandbox.mjs && electron-vite build && electron .",
     "typecheck": "tsc",
+    "web": "vite --config vite.web.config.ts",
+    "build:web": "vite build --config vite.web.config.ts",
+    "preview:web": "vite build --config vite.web.config.ts && vite preview --config vite.web.config.ts",
     "package:macos": "electron-vite build && electron-builder --mac --arm64 --publish never",
     "package:linux": "electron-vite build && electron-builder --linux deb --x64 --publish never"
   },

@@ -33,8 +33,10 @@ function savedLook(): RiddenLook {
 }
 
 /** The route planner: a separate mode, in steps, over its own map. */
-export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes }: {
+export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes, rides = true }: {
   config: Config;
+  /** There are rides, so routes can tell ridden trail from new, and take in favourites. */
+  rides?: boolean;
   maps: Record<string, MapInfo>;
   bundled: Bundled;
   areas: AreaView[];
@@ -209,14 +211,14 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
     <div className="planner">
       <header className="mode-bar">
         <strong>Route planner</strong>
-        <span className="small">Routes in your areas that mix trails you know with ones you don't. Nothing here changes the main map.</span>
+        <span className="small">{rides ? 'Routes in your areas that mix trails you know with ones you don\'t.' : 'Routes in your areas, worked out on your computer.'} Nothing here changes the main map.</span>
         <button onClick={showRoutes}>Saved routes</button>
         <button onClick={exit}>← Back to the map</button>
       </header>
       <div className="planner-body">
         <aside className="side plan-side" aria-label="Route planner steps">
           <section className="step">
-            {head(1, 'Areas', `${chosen.size} area${chosen.size === 1 ? '' : 's'}${net ? ` · ${distance(net.total)} of paths, ${pct(net.ridden / (net.total || 1))} ridden` : ''}`)}
+            {head(1, 'Areas', `${chosen.size} area${chosen.size === 1 ? '' : 's'}${net ? ` · ${distance(net.total)} of paths${rides ? `, ${pct(net.ridden / (net.total || 1))} ridden` : ''}` : ''}`)}
             {step === 1 && (
               <>
                 <p className="small">Choose the areas to plan in. Routes stay inside them.</p>
@@ -363,10 +365,12 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 </fieldset>
                   </>
                 )}
-                <label className="fav">
-                  <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} /> Include my favourite trails
-                  <span className="small"> The ones you have ridden most in these areas. Routes go out of their way for them, and ones with more come first.</span>
-                </label>
+                {rides && (
+                  <label className="fav">
+                    <input type="checkbox" checked={favorites} onChange={(e) => setFavorites(e.target.checked)} /> Include my favourite trails
+                    <span className="small"> The ones you have ridden most in these areas. Routes go out of their way for them, and ones with more come first.</span>
+                  </label>
+                )}
                 <label className="fav">
                   <input type="checkbox" checked={descentOn} onChange={(e) => setDescentOn(e.target.checked)} /> Include a long descent
                   <span className="small"> One continuous stretch that keeps going down. If the chosen areas have none that long, you are told the longest there is.</span>
@@ -454,8 +458,8 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
           {error && <p className="error" role="alert">{error}</p>}
           <div className="plan-key small">
             <h2>Map key</h2>
-            {(ridden === 'show' || ridden === 'dark') && <p><span className="swatch" style={{ background: ridden === 'dark' ? RIDDEN_DARK : RIDDEN_COLOR }} /> Ridden</p>}
-            {ridden === 'heatmap' && (
+            {rides && (ridden === 'show' || ridden === 'dark') && <p><span className="swatch" style={{ background: ridden === 'dark' ? RIDDEN_DARK : RIDDEN_COLOR }} /> Ridden</p>}
+            {rides && ridden === 'heatmap' && (
               <>
                 <p>Ridden, by times ridden:</p>
                 <ul className="legend">
@@ -463,10 +467,10 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 </ul>
               </>
             )}
-            <p><span className="swatch dashed" /> {ridden === 'hide' ? 'Paths, by kind' : 'Not ridden yet, by kind'}</p>
+            <p><span className="swatch dashed" /> {!rides || ridden === 'hide' ? 'Paths, by kind' : 'Not ridden yet, by kind'}</p>
             <p><span className="swatch dotted" /> Private or no bikes</p>
             <label><input type="checkbox" checked={baseMap} onChange={(e) => setBaseMap(e.target.checked)} /> Show the base map</label>
-            <label>
+            {rides && <label>
               Paths you&apos;ve ridden{' '}
               <select value={ridden} aria-label="Paths you've ridden" onChange={(e) => {
                 const v = e.target.value as RiddenLook;
@@ -480,7 +484,7 @@ export function Planner({ config, maps, bundled, areas, groups, exit, showRoutes
                 <option value="heatmap">Heatmap</option>
                 <option value="hide">Hide</option>
               </select>
-            </label>
+            </label>}
             <p className="credit">Paths © OpenStreetMap contributors. Elevation: Mapzen Terrain Tiles (USGS, SRTM and others).</p>
           </div>
         </aside>
