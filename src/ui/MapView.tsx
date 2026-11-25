@@ -1,4 +1,4 @@
-import { AttributionControl, Map as GLMap, NavigationControl, ScaleControl, setWorkerUrl, type GeoJSONSource, type StyleSpecification } from 'maplibre-gl';
+import { AttributionControl, GeolocateControl, Map as GLMap, NavigationControl, ScaleControl, setWorkerUrl, type GeoJSONSource, type StyleSpecification } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef } from 'react';
 import type { Bounds, View } from '../core/api.ts';
@@ -31,6 +31,8 @@ interface Props {
   onWent(): void;
   onView(v: View): void;
   onTileError(message: string | null): void;
+  /** A button that shows where you are, for phones. Read once, when the map is made. */
+  locate?: boolean;
 }
 
 export function MapView(props: Props) {
@@ -49,9 +51,11 @@ export function MapView(props: Props) {
         : focus ? { bounds: focus, fitBoundsOptions: { padding: 40 } } : { center: [0, 25] as [number, number], zoom: 1.4 }),
     });
     m.touchZoomRotate.disableRotation();
-    m.addControl(new NavigationControl({ showCompass: false }), 'top-right');
+    // Phones pinch to zoom, so they get a button for where you are instead of + and -.
+    if (props.locate && 'geolocation' in navigator) m.addControl(new GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true }), 'top-right');
+    else m.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     m.addControl(new ScaleControl(), 'bottom-left');
-    m.addControl(new AttributionControl({ compact: false }), 'bottom-right');
+    m.addControl(new AttributionControl({ compact: !!props.locate }), 'bottom-right');
     let t = 0;
     m.on('moveend', () => {
       clearTimeout(t);
@@ -62,12 +66,22 @@ export function MapView(props: Props) {
       if (!navigator.onLine) cb.current.onTileError('No internet. Default maps need it. Your rides and custom maps still work.');
     });
     const shapeTo = (at: [number, number]) => drawnShape(cb.current.drawShape, start.current!, at);
+    /** Shows the shape so far. With touch there is no mouse to follow, so the first tap shows as a dot. */
+    const sketch = (s: Shape) => (m.getSource(DRAW) as GeoJSONSource | undefined)?.setData({
+      type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [shapeRing(s.kind === 'circle' ? { ...s, radius: Math.max(s.radius, 1) } : s)] },
+    });
+    const dot = (at: [number, number]) => {
+      // About 8 pixels across at any zoom.
+      const r = (8 * 40_075_016 * Math.cos((at[1] * Math.PI) / 180)) / (512 * 2 ** m.getZoom());
+      sketch({ kind: 'circle', center: at, radius: r });
+    };
     m.on('click', (e) => {
       const at = e.lngLat.toArray() as [number, number];
       if (cb.current.placing) cb.current.onPlace(at);
       else if (cb.current.drawing) {
         if (!start.current) {
           start.current = at;
+          dot(at);
           cb.current.onDrawShape(shapeTo(at));
         } else {
           const s = shapeTo(at);
@@ -83,8 +97,7 @@ export function MapView(props: Props) {
     m.on('mousemove', (e) => {
       if (!cb.current.drawing || !start.current) return;
       const s = shapeTo(e.lngLat.toArray() as [number, number]);
-      const src = m.getSource(DRAW) as GeoJSONSource | undefined;
-      src?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [shapeRing(s.kind === 'circle' ? { ...s, radius: Math.max(s.radius, 1) } : s)] } });
+      sketch(s);
       cb.current.onDrawShape(s);
     });
     m.on('mouseenter', ROAD_LINES, () => {
